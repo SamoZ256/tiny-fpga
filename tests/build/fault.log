@@ -1,0 +1,3 @@
+fault-ebreak         FAULT pc=00000000
+fault-misaligned     FAULT pc=00000000
+fault-illegal        FAULT pc=00000000

@@ -1,0 +1,2 @@
+errors=0
+tb_mdu.sv:39: $finish called at 100036 (1s)

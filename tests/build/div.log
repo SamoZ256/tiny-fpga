@@ -1,0 +1,2 @@
+errors=0
+tb_div.sv:66: $finish called at 27248951 (1s)
