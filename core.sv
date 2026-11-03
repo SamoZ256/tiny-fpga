@@ -67,9 +67,6 @@ module core (
     // Display
 
     // SPU
-    logic spu_ctrl[spu::ENGINE_COUNT];
-    spu::CtrlCommand spu_ctrl_cmd[spu::ENGINE_COUNT];
-
     logic [spu::CRAM_ADDR_WIDTH-1:0] cram_w_addr;
     assign cram_w_addr = ram_addr[spu::CRAM_ADDR_WIDTH-1:0];
     logic [2:0] cram_w_strobe;
@@ -81,16 +78,15 @@ module core (
     logic [spu::VRAM_DATA_WIDTH-1:0] vram_din;
 
     logic [spu::CMDRAM_ADDR_WIDTH-1:0] cmdram_w_addr;
-    assign cmdram_w_addr = ram_addr[spu::CMDRAM_ADDR_WIDTH-1:0];
-    logic [3:0] cmdram_w_strobe;
+    assign cmdram_w_addr = ram_addr[spu::CMDRAM_ADDR_WIDTH:1];
+    logic [7:0] cmdram_w_strobe;
     logic [spu::COMMAND_SIZE-1:0] cmdram_din;
 
-    wire spu::Rgb color;
+    spu::Rgb color;
+    logic [9:0] target_line;
     Spu spu (
        	.clk  (clk_pixel),
         .cpu_clk(clk),
-        .ctrl(spu_ctrl),
-        .ctrl_cmd(spu_ctrl_cmd),
         .cram_w_addr(cram_w_addr),
         .cram_w_strobe(cram_w_strobe),
         .cram_din(cram_din),
@@ -100,19 +96,8 @@ module core (
         .cmdram_w_addr(cmdram_w_addr),
         .cmdram_w_strobe(cmdram_w_strobe),
         .cmdram_din(cmdram_din),
-       	.color(color)
-    );
-
-    // VGA input and output signals
-    wire vblank;
-
-    logic vblank_sync;
-    Debouncer #(
-        .N(2)
-    ) vblank_debouncer (
-        clk,
-        vblank,
-        vblank_sync
+       	.color(color),
+        .cpu_target_line(target_line)
     );
 
     // VGA Signal generator
@@ -124,7 +109,7 @@ module core (
         .hsync(video_hsync),
         .vsync(video_vsync),
         .de(video_de),
-        .vblank(vblank),
+        .vblank(),
         .vga_r(video_r),
         .vga_g(video_g),
         .vga_b(video_b)
@@ -136,8 +121,7 @@ module core (
     localparam MMIO_BTN_ADDR = 32'h04000001;
     localparam MMIO_SCR_WIDTH_ADDR = 32'h04000002;
     localparam MMIO_SCR_HEIGHT_ADDR = 32'h04000003;
-    localparam MMIO_VBLANK_ADDR = 32'h04000004;
-    localparam MMIO_SPU_CTRL_ADDR = 32'h08000000;
+    localparam MMIO_TARGET_LINE_ADDR = 32'h04000004;
     localparam MMIO_CRAM_ADDR = 32'h09000000;
     localparam MMIO_VRAM_ADDR = 32'h0a000000;
     localparam MMIO_CMDRAM_ADDR = 32'h0b000000;
@@ -149,7 +133,7 @@ module core (
             MMIO_BTN_ADDR: ram_mapped_dout = {30'b0, btn};
             MMIO_SCR_WIDTH_ADDR: ram_mapped_dout = 640; // TODO: don't hardcode
             MMIO_SCR_HEIGHT_ADDR: ram_mapped_dout = 480; // TODO: don't hardcode
-            MMIO_VBLANK_ADDR: ram_mapped_dout = {31'b0, vblank_sync};
+            MMIO_TARGET_LINE_ADDR: ram_mapped_dout = {22'b0, target_line};
         endcase
     end
 
@@ -161,9 +145,6 @@ module core (
     end
 
     always_comb begin
-        spu_ctrl = '{default: '0};
-        spu_ctrl_cmd = '{default: spu::CtrlCommand'('x)};
-
         cram_w_strobe = '0;
         cram_din = '0;
 
@@ -173,20 +154,20 @@ module core (
         cmdram_w_strobe = '0;
         cmdram_din = '0;
 
-        if (ram_addr >= MMIO_SPU_CTRL_ADDR && ram_addr < MMIO_SPU_CTRL_ADDR + spu::ENGINE_COUNT) begin
-            if (ram_w_strobe == 4'b1111) begin
-                spu_ctrl[ram_addr[3:0]] = 1;
-                spu_ctrl_cmd[ram_addr[3:0]] = spu::CtrlCommand'(ram_din);
-            end
-        end else if (ram_addr >= MMIO_CRAM_ADDR && ram_addr < MMIO_CRAM_ADDR + spu::CRAM_SIZE) begin
+        if (ram_addr >= MMIO_CRAM_ADDR && ram_addr < MMIO_CRAM_ADDR + spu::CRAM_SIZE) begin
             cram_w_strobe = ram_w_strobe[2:0];
             cram_din = ram_din[spu::CRAM_DATA_WIDTH-1:0];
         end else if (ram_addr >= MMIO_VRAM_ADDR && ram_addr < MMIO_VRAM_ADDR + spu::VRAM_SIZE) begin
             vram_w_strobe = ram_w_strobe[0];
             vram_din = ram_din[spu::VRAM_DATA_WIDTH-1:0];
-        end else if (ram_addr >= MMIO_CMDRAM_ADDR && ram_addr < MMIO_CMDRAM_ADDR + spu::CMDRAM_SIZE) begin
-            cmdram_w_strobe = ram_w_strobe;
-            cmdram_din = ram_din[spu::COMMAND_SIZE-1:0];
+        end else if (ram_addr >= MMIO_CMDRAM_ADDR && ram_addr < MMIO_CMDRAM_ADDR + spu::CMDRAM_SIZE * 2) begin
+            if (ram_addr[0]) begin
+                cmdram_w_strobe = {ram_w_strobe, 4'b0};
+                cmdram_din = {ram_din, 32'b0};
+            end else begin
+                cmdram_w_strobe = {4'b0, ram_w_strobe};
+                cmdram_din = {32'b0, ram_din};
+            end
         end
     end
 endmodule

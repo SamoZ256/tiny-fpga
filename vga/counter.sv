@@ -1,12 +1,13 @@
 module VgaCounter #(
     parameter LINE,
     parameter SCREEN,
-    parameter START_X = 0
+    parameter START_X = 0,
+    parameter START_Y = 0
 ) (
     input wire clk,
 
     output logic [9:0] x = START_X,
-    output logic [9:0] y = 0
+    output logic [9:0] y = START_Y
 );
     always_ff @(posedge clk) begin
         if (x == LINE) begin

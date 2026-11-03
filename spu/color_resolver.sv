@@ -1,39 +1,48 @@
 import spu::*;
 
-// NOTE: RGB and alpha are in the same cycle on both the inputs and the output, latency is 1 cycle
+// NOTE: latency is 1 cycle
 module SpuColorResolver (
     input logic clk,
 
-    input Rgba src,
-    input Rgba dst,
+    input Rgba src, // Straight alpha
+    input Rgba dst, // Premultiplied
 
-    output Rgba res
+    output Rgba res // Premultiplied
 );
+    logic [7:0] one_minus_src_a;
+    assign one_minus_src_a = 8'hff - src.a;
+
     // Alpha
-    logic [7:0] dst_a_times_one_minus_src_a;
+    logic [7:0] dst_a_scaled;
     SpuMultiplierNormalized8 alpha_multiplier(
         .a(dst.a),
-        .b('hff - src.a),
-        .res(dst_a_times_one_minus_src_a)
+        .b(one_minus_src_a),
+        .res(dst_a_scaled)
     );
 
     always_ff @(posedge clk) begin
-        res.a <= src.a + dst_a_times_one_minus_src_a;
+        res.a <= src.a + dst_a_scaled;
     end
 
     // Color
-    Rgb dst_premultiplied;
+    Rgb src_premultiplied;
+    Rgb dst_scaled;
     for (genvar i = 0; i < 3; i++) begin : multipliers
-        SpuMultiplierNormalized8 multiplier(
+        SpuMultiplierNormalized8 src_multiplier(
+            .a(src.rgb[i]),
+            .b(src.a),
+            .res(src_premultiplied[i])
+        );
+        SpuMultiplierNormalized8 dst_multiplier(
             .a(dst.rgb[i]),
-            .b(dst_a_times_one_minus_src_a),
-            .res(dst_premultiplied[i])
+            .b(one_minus_src_a),
+            .res(dst_scaled[i])
         );
     end
 
     always_ff @(posedge clk) begin
         for (int i = 0; i < 3; i++) begin
-            res.rgb[i] <= dst_premultiplied[i] + src.rgb[i];
+            res.rgb[i] <= src_premultiplied[i] + dst_scaled[i];
         end
     end
 endmodule

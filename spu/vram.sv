@@ -1,11 +1,10 @@
 module Vram #(
     parameter ADDR_WIDTH,
     parameter DATA_WIDTH,
+    parameter W_STROBE_WIDTH = (DATA_WIDTH + 7) / 8,
+    parameter DATA_ELEMENT_WIDTH = DATA_WIDTH / W_STROBE_WIDTH,
     parameter SIZE,
-    parameter NUM_R_PORTS = 1,
-
-    localparam W_STROBE_WIDTH = (DATA_WIDTH + 7) / 8,
-    localparam DATA_ELEMENT_WIDTH = DATA_WIDTH / W_STROBE_WIDTH
+    parameter NUM_R_PORTS = 1
 ) (
     input logic                                   r_clks[NUM_R_PORTS],
     input logic      [            ADDR_WIDTH-1:0] r_addrs[NUM_R_PORTS],
@@ -38,9 +37,9 @@ endmodule
 module SinglePortVram #(
     parameter ADDR_WIDTH,
     parameter DATA_WIDTH,
-    parameter SIZE,
-
-    localparam W_STROBE_WIDTH = (DATA_WIDTH + 7) / 8
+    parameter W_STROBE_WIDTH = (DATA_WIDTH + 7) / 8,
+    parameter DATA_ELEMENT_WIDTH = DATA_WIDTH / W_STROBE_WIDTH,
+    parameter SIZE
 ) (
     input logic                                   r_clk,
     input logic      [            ADDR_WIDTH-1:0] r_addr,
@@ -59,6 +58,8 @@ module SinglePortVram #(
     Vram #(
         .ADDR_WIDTH(ADDR_WIDTH),
         .DATA_WIDTH(DATA_WIDTH),
+        .W_STROBE_WIDTH(W_STROBE_WIDTH),
+        .DATA_ELEMENT_WIDTH(DATA_ELEMENT_WIDTH),
         .SIZE(SIZE)
     ) vram (
         .r_clks(r_clks),

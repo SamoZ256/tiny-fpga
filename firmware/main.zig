@@ -1,7 +1,6 @@
 const std = @import("std");
 const common = @import("common/common.zig");
 const mmio = @import("common/mmio.zig");
-const Spu = @import("spu/Spu.zig");
 
 export fn _start() linksection(".text.start") callconv(.naked) noreturn {
     asm volatile (
@@ -74,8 +73,6 @@ fn main() void {
 
     // SPU
 
-    const spu = Spu.init();
-
     // Palette
     mmio.writeCram(0, 0xff00ff);
     mmio.writeCram(1, 0x000000);
@@ -87,120 +84,91 @@ fn main() void {
     // Font
     initializeFontVram();
 
-    // Background
-    {
-        var encoder = Spu.InstructionEncoder.init(0);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .cram_addr_offset = 1 });
-        _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, Spu.InstructionEncoder.getCyclesFromCoords(0, 10) - 2);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .cram_addr_offset = 2 });
-        _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, Spu.InstructionEncoder.getCyclesFromCoords(0, 1) - 2);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .alpha_bits = 1 });
-        encoder.endEncoding();
-    }
-
-    spu.engines[0].reset(0);
-
-    // Window
-    {
-        var encoder = Spu.InstructionEncoder.init(500);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .alpha_bits = 1 });
-        _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, Spu.InstructionEncoder.getCyclesFromCoords(0, 100) - 1);
-        const loop_addr = encoder.encodeSleep(Spu.InstructionEncoder.RZ, 100 - 1);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .cram_addr_offset = 2 });
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .cram_addr_offset = 1 });
-        _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, 200 - 3);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .cram_addr_offset = 2 });
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .alpha_bits = 1 });
-        _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, Spu.InstructionEncoder.getCyclesFromCoords(0, 1) - 100 - 200 - 5);
-        _ = encoder.encodeJal(Spu.InstructionEncoder.RZ, loop_addr);
-        encoder.endEncoding();
-    }
-
-    spu.engines[1].reset(500);
-
-    // Foreground
-    const text = "\u{1e} Page Up \u{1f} Page Down";
-    const text2 = "Hello, World!";
-
-    {
-        var encoder = Spu.InstructionEncoder.init(20);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .alpha_bits = 1 });
-        _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, Spu.InstructionEncoder.getCyclesFromCoords(0, 1) - 12);
-        _ = encoder.encodeLi(1, 40);
-        _ = encoder.encodeLi(2, text.len);
-        _ = encoder.encodeCall(Spu.InstructionEncoder.RZ, 400);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .alpha_bits = 1 });
-        _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, Spu.InstructionEncoder.getCyclesFromCoords(0, 4) - 12);
-        _ = encoder.encodeLi(1, 200);
-        _ = encoder.encodeLi(2, text2.len);
-        _ = encoder.encodeCall(Spu.InstructionEncoder.RZ, 400);
-        encoder.endEncoding();
-    }
-
-    {
-        var encoder = Spu.InstructionEncoder.init(40);
-        for (0..text.len) |i| {
-            const c = text[i];
-            _ = encoder.encodeSllI(5, 7, 3);
-            _ = encoder.encodeAddI(5, 5, getFontVramAddr(c, 0, 0));
-            _ = encoder.encodeBlit(5, .{ .vram_value_shift_increment = 8, .cram_addr_bits = 0, .alpha_bits = 8, .cram_addr_offset = 2 });
-            _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, 4);
-        }
-        _ = encoder.encodeRet();
-        encoder.endEncoding();
-    }
-
-    {
-        var encoder = Spu.InstructionEncoder.init(200);
-        for (0..text2.len) |i| {
-            const c = text2[i];
-            _ = encoder.encodeSllI(5, 7, 3);
-            _ = encoder.encodeAddI(5, 5, getFontVramAddr(c, 0, 0));
-            _ = encoder.encodeBlit(5, .{ .vram_value_shift_increment = 8, .cram_addr_bits = 0, .alpha_bits = 8, .cram_addr_offset = 3 });
-            _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, 4);
-        }
-        _ = encoder.encodeRet();
-        encoder.endEncoding();
-    }
-
-    {
-        var encoder = Spu.InstructionEncoder.init(400);
-        _ = encoder.encodeLi(7, 0);
-        _ = encoder.encodeLi(6, 8);
-        const loop_addr = encoder.encodeCall(1, 0);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .alpha_bits = 1 });
-        _ = encoder.encodeLi(5, (common.LINE + 1) - 1 - 11);
-        _ = encoder.encodeSllI(4, 2, 3);
-        _ = encoder.encodeSubR(5, 5, 4);
-        _ = encoder.encodeSleep(5, 0);
-        _ = encoder.encodeInc(7);
-        _ = encoder.encodeBne(7, 6, loop_addr);
-        _ = encoder.encodeRet();
-        encoder.endEncoding();
-    }
-
-    spu.engines[2].reset(20);
-
-    // Wait for vblank and start
-    Spu.waitForVblank();
-    spu.engines[0].start();
-    spu.engines[1].start();
-    spu.engines[2].start();
-
     // Main loop
-    var buttons_last: u2 = 0;
+    //var buttons_last: u2 = 0;
     while (true) {
         const buttons = mmio.readButtons();
-        if (buttons & 1 != 0 and buttons_last & 1 == 0) {
-            spu.engines[1].stop();
-        }
-        if (buttons & 2 != 0 and buttons_last & 2 == 0) {
-            spu.engines[1].start();
-        }
-        buttons_last = buttons;
+        //buttons_last = buttons;
         mmio.writeLed(buttons);
 
-        // Wait for vblank
-        Spu.waitForVblank();
+        // Draw
+        const Draw = struct {
+            // Must match SpuCommandKind in spu/spu.sv (begin_line, span and tiles aren't implemented yet)
+            const Kind = enum(u3) { end_line = 1, fill = 2 };
+
+            // Must match the command layout in spu/spu.sv
+            const Command = packed struct(u64) {
+                kind: Kind,
+                x: u10 = 0,
+                len_minus_one: u10 = 0,
+                color: u32 = 0, // 0xAABBGGRR
+                reserved: u9 = 0,
+            };
+
+            const ground_y = 440;
+            const ground_color = 0xff208020;
+            const ball_color = 0x7f0080ff;
+            const radius = 100;
+            const min_x = radius;
+            const max_x = common.WIDTH - 1 - radius;
+            const min_y = radius;
+            const max_y = ground_y - 1 - radius;
+
+            // Half-width of each row of the ball, computed at compile time
+            const half_widths = blk: {
+                var widths: [2 * radius + 1]u8 = undefined;
+                for (&widths, 0..) |*width, i| {
+                    const dy: f64 = @as(f64, @floatFromInt(i)) - radius;
+                    width.* = @intFromFloat(@round(@sqrt(radius * radius - dy * dy)));
+                }
+                break :blk widths;
+            };
+
+            var ball_x: i32 = 200;
+            var ball_y: i32 = 150;
+            var vel_x: i32 = 3;
+            var vel_y: i32 = 2;
+
+            fn moveBall() void {
+                ball_x = std.math.clamp(ball_x + vel_x, min_x, max_x);
+                if (ball_x == min_x or ball_x == max_x) vel_x = -vel_x;
+                ball_y = std.math.clamp(ball_y + vel_y, min_y, max_y);
+                if (ball_y == min_y or ball_y == max_y) vel_y = -vel_y;
+            }
+
+            inline fn fill(index: *mmio.CmdramAddr, x: u32, len: u32, color: u32) void {
+                mmio.writeCmdram(index.*, @bitCast(Command{ .kind = .fill, .x = @intCast(x), .len_minus_one = @intCast(len - 1), .color = color }));
+                index.* += 1;
+            }
+
+            // The line buffer isn't cleared, so every line must cover all WIDTH pixels. The blitter draws one
+            // pixel per pixel clock, so the background is drawn around the ball instead of underneath it
+            fn drawLine(line: u32) void {
+                var index: mmio.CmdramAddr = 0;
+                if (line >= ground_y) {
+                    fill(&index, 0, common.WIDTH, ground_color);
+                } else {
+                    // Sky, getting lighter towards the ground
+                    const sky = 0xff000000 | ((0x60 + line / 4) << 16) | ((0x20 + line / 4) << 8) | 0x10;
+                    const row = @as(i32, @intCast(line)) - ball_y + radius;
+                    fill(&index, 0, common.WIDTH, sky);
+                    if (row >= 0 and row <= 2 * radius) {
+                        const half_width: i32 = half_widths[@intCast(row)];
+                        const x0: u32 = @intCast(ball_x - half_width);
+                        const x1: u32 = @intCast(ball_x + half_width + 1);
+                        fill(&index, x0, x1 - x0, ball_color);
+                    }
+                }
+                mmio.writeCmdram(index, @bitCast(Command{ .kind = .end_line }));
+            }
+        };
+
+        const line = mmio.waitForNextLine();
+        if (line < common.HEIGHT) {
+            Draw.drawLine(line);
+        } else if (line == common.HEIGHT) {
+            // The last visible line has been submitted, move the ball for the next frame
+            Draw.moveBall();
+        }
     }
 }
