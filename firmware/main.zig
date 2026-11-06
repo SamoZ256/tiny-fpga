@@ -99,8 +99,8 @@ fn main() void {
             // Must match the command layout in spu/spu.sv
             const Command = packed struct(u64) {
                 kind: Kind,
-                x: u10 = 0,
-                len: u10 = 0,
+                begin_x: u10 = 0,
+                end_x: u10 = 0,
                 color: u32 = 0, // 0xAABBGGRR
                 reserved: u9 = 0,
             };
@@ -137,7 +137,7 @@ fn main() void {
             }
 
             inline fn fill(index: *mmio.CmdramAddr, x: u32, len: u32, color: u32) void {
-                mmio.writeCmdram(index.*, @bitCast(Command{ .kind = .fill, .x = @intCast(x), .len = @intCast(len), .color = color }));
+                mmio.writeCmdram(index.*, @bitCast(Command{ .kind = .fill, .begin_x = @intCast(x), .end_x = @intCast(x + len), .color = color }));
                 index.* += 1;
             }
 
