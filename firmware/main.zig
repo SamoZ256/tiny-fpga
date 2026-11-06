@@ -93,28 +93,25 @@ fn main() void {
 
         // Draw
         const Draw = struct {
-            // Must match SpuCommandKind in spu/spu.sv (begin_line, span and tiles aren't implemented yet)
             const Kind = enum(u3) { end_line = 1, fill = 2 };
 
-            // Must match the command layout in spu/spu.sv
             const Command = packed struct(u64) {
                 kind: Kind,
                 begin_x: u10 = 0,
                 end_x: u10 = 0,
-                color: u32 = 0, // 0xAABBGGRR
+                color: u32 = 0,
                 reserved: u9 = 0,
             };
 
             const ground_y = 440;
-            const ground_color = 0xff208020;
-            const ball_color = 0x7f0080ff;
+            const ground_color = common.Rgba.init(0x20, 0x80, 0x20, 0xff);
+            const ball_color = common.Rgba.initPremultiplied(0xff, 0x80, 0x00, 0x7f);
             const radius = 100;
             const min_x = radius;
             const max_x = common.WIDTH - 1 - radius;
             const min_y = radius;
             const max_y = ground_y - 1 - radius;
 
-            // Half-width of each row of the ball, computed at compile time
             const half_widths = blk: {
                 var widths: [2 * radius + 1]u8 = undefined;
                 for (&widths, 0..) |*width, i| {
@@ -136,20 +133,17 @@ fn main() void {
                 if (ball_y == min_y or ball_y == max_y) vel_y = -vel_y;
             }
 
-            inline fn fill(index: *mmio.CmdramAddr, x: u32, len: u32, color: u32) void {
-                mmio.writeCmdram(index.*, @bitCast(Command{ .kind = .fill, .begin_x = @intCast(x), .end_x = @intCast(x + len), .color = color }));
+            inline fn fill(index: *mmio.CmdramAddr, x: u32, len: u32, color: common.Rgba) void {
+                mmio.writeCmdram(index.*, @bitCast(Command{ .kind = .fill, .begin_x = @intCast(x), .end_x = @intCast(x + len), .color = color.toRawBits() }));
                 index.* += 1;
             }
 
-            // The line buffer isn't cleared, so every line must cover all WIDTH pixels. The blitter draws one
-            // pixel per pixel clock, so the background is drawn around the ball instead of underneath it
             fn drawLine(line: u32) void {
                 var index: mmio.CmdramAddr = 0;
                 if (line >= ground_y) {
                     fill(&index, 0, common.WIDTH, ground_color);
                 } else {
-                    // Sky, getting lighter towards the ground
-                    const sky = 0xff000000 | ((0x60 + line / 4) << 16) | ((0x20 + line / 4) << 8) | 0x10;
+                    const sky = common.Rgba.init(0x10, @intCast(0x20 + line / 4), @intCast(0x60 + line / 4), 0xff);
                     const row = @as(i32, @intCast(line)) - ball_y + radius;
                     fill(&index, 0, common.WIDTH, sky);
                     if (row >= 0 and row <= 2 * radius) {
@@ -167,7 +161,6 @@ fn main() void {
         if (line < common.HEIGHT) {
             Draw.drawLine(line);
         } else if (line == common.HEIGHT) {
-            // The last visible line has been submitted, move the ball for the next frame
             Draw.moveBall();
         }
     }
