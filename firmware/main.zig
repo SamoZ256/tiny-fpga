@@ -100,7 +100,7 @@ fn main() void {
             const Command = packed struct(u64) {
                 kind: Kind,
                 x: u10 = 0,
-                len_minus_one: u10 = 0,
+                len: u10 = 0,
                 color: u32 = 0, // 0xAABBGGRR
                 reserved: u9 = 0,
             };
@@ -137,7 +137,7 @@ fn main() void {
             }
 
             inline fn fill(index: *mmio.CmdramAddr, x: u32, len: u32, color: u32) void {
-                mmio.writeCmdram(index.*, @bitCast(Command{ .kind = .fill, .x = @intCast(x), .len_minus_one = @intCast(len - 1), .color = color }));
+                mmio.writeCmdram(index.*, @bitCast(Command{ .kind = .fill, .x = @intCast(x), .len = @intCast(len), .color = color }));
                 index.* += 1;
             }
 

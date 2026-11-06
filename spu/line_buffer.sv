@@ -5,16 +5,26 @@ module SpuLineBuffer (
 
     input logic bank_sel,
 
-    input logic [LINE_BUFFER_ADDR_WIDTH-1:0] r_addr,
+    input logic [LINE_BUFFER_LOGICAL_ADDR_WIDTH-1:0] r_addr,
     output Rgb dout,
 
-    input logic [LINE_BUFFER_ADDR_WIDTH-1:0] w_addr,
-    input logic w_strobe,
-    input Rgba din
+    input LanesAddr w_addr,
+    input LanesWStrobe w_strobe,
+    input RgbaLanes din
 );
-    logic [LINE_BUFFER_ADDR_WIDTH-1:0] w_addr_delayed2;
+    logic [LINE_BUFFER_LOGICAL_ADDR_WIDTH-1:0] r_addr_delayed1;
     Delayer #(
-        .T(logic [LINE_BUFFER_ADDR_WIDTH-1:0]),
+        .T(logic [LINE_BUFFER_LOGICAL_ADDR_WIDTH-1:0]),
+        .CYCLE_DELAY(1)
+    ) r_addr_delayer2(
+        .clk(clk),
+        .in(r_addr),
+        .out(r_addr_delayed1)
+    );
+
+    LanesAddr w_addr_delayed2;
+    Delayer #(
+        .T(LanesAddr),
         .CYCLE_DELAY(2)
     ) w_addr_delayer2(
         .clk(clk),
@@ -22,9 +32,9 @@ module SpuLineBuffer (
         .out(w_addr_delayed2)
     );
 
-    logic w_strobe_delayed2;
+    LanesWStrobe w_strobe_delayed2;
     Delayer #(
-        .T(logic),
+        .T(LanesWStrobe),
         .CYCLE_DELAY(2)
     ) w_strobe_delayer2(
         .clk(clk),
@@ -32,9 +42,9 @@ module SpuLineBuffer (
         .out(w_strobe_delayed2)
     );
 
-    Rgba din_delayed1;
+    RgbaLanes din_delayed1;
     Delayer #(
-        .T(Rgba),
+        .T(RgbaLanes),
         .CYCLE_DELAY(1)
     ) din_delayer1(
         .clk(clk),
@@ -63,41 +73,42 @@ module SpuLineBuffer (
     );
 
     // Buffers
-    Rgba din_resolved;
-    logic [LINE_BUFFER_DATA_WIDTH-1:0] douts_raw[2];
+    RgbaLanes din_resolved;
+    Lanes douts_raw[2];
     for (genvar i = 0; i < 2; i++) begin : line_buffers
         SinglePortVram #(
             .ADDR_WIDTH(LINE_BUFFER_ADDR_WIDTH),
             .DATA_WIDTH(LINE_BUFFER_DATA_WIDTH),
-            .W_STROBE_WIDTH(1),
+            .W_STROBE_WIDTH(LINE_BUFFER_DATA_LANES),
             .SIZE      (LINE_BUFFER_SIZE)
         ) line_buffer (
             .r_clk(clk),
-            .r_addr(i == bank_sel ? r_addr : w_addr),
+            .r_addr(i == bank_sel ? r_addr[LINE_BUFFER_LOGICAL_ADDR_WIDTH-1:LINE_BUFFER_DATA_LANES_LOG2] : w_addr),
             .dout(douts_raw[i]),
 
             .w_clk(clk),
             .w_addr(w_addr_delayed2),
             .w_strobe(i == bank_sel_delayed2 ? '0 : w_strobe_delayed2),
-            .din({din_resolved.a, din_resolved.rgb[2], din_resolved.rgb[1], din_resolved.rgb[0]})
+            .din(Lanes'(din_resolved))
         );
     end
 
     // Color resolve
-    logic [LINE_BUFFER_DATA_WIDTH-1:0] blend_dout_raw;
-    assign blend_dout_raw = douts_raw[!bank_sel_delayed1];
-    SpuColorResolver color_resolver(
-        .clk(clk),
-        .src(din_delayed1),
-       	.dst('{
-                rgb: {blend_dout_raw[7:0], blend_dout_raw[15:8], blend_dout_raw[23:16]},
-                a: blend_dout_raw[31:24]
-            }),
-       	.res(din_resolved)
-    );
+    RgbaLanes blend_dout;
+    assign blend_dout = RgbaLanes'(douts_raw[!bank_sel_delayed1]);
+    for (genvar i = 0; i < LINE_BUFFER_DATA_LANES; i++) begin : color_resolvers
+        Rgba crnt_blend_dout;
+        assign crnt_blend_dout = blend_dout[i];
+        SpuColorResolver color_resolver(
+            .clk(clk),
+            .src(din_delayed1[i]),
+           	.dst(crnt_blend_dout),
+           	.res(din_resolved[i])
+        );
+    end
 
     // Output
-    logic [LINE_BUFFER_DATA_WIDTH-1:0] dout_raw;
-    assign dout_raw = douts_raw[bank_sel];
-    assign dout = {dout_raw[7:0], dout_raw[15:8], dout_raw[23:16]};
+    RgbaLanes dout_raw;
+    assign dout_raw = RgbaLanes'(douts_raw[bank_sel]);
+    assign dout = dout_raw[r_addr_delayed1[LINE_BUFFER_DATA_LANES_LOG2-1:0]].rgb;
 endmodule

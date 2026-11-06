@@ -120,9 +120,9 @@ module Spu (
     assign command = cmdram_douts_raw[bank_sel];
 
     // Line buffer
-    Rgba line_din;
-    logic [LINE_BUFFER_ADDR_WIDTH-1:0] line_w_addr;
-    logic line_w_strobe;
+    RgbaLanes lines_din;
+    LanesAddr line_w_addr;
+    LanesWStrobe line_w_strobe;
     SpuLineBuffer line_buffer(
         .clk(clk),
         .bank_sel(bank_sel),
@@ -130,7 +130,7 @@ module Spu (
         .dout(color),
         .w_addr(line_w_addr),
         .w_strobe(line_w_strobe),
-        .din(line_din)
+        .din(lines_din)
     );
 
     // Command
@@ -138,13 +138,13 @@ module Spu (
     assign cmd_kind = SpuCommandKind::Type'(command[2:0]);
     logic [9:0] cmd_x;
     assign cmd_x = command[12:3];
-    logic [9:0] cmd_len_minus_one;
-    assign cmd_len_minus_one = command[22:13];
+    logic [9:0] cmd_len;
+    assign cmd_len = command[22:13];
     logic [31:0] cmd_fill_color_raw;
     assign cmd_fill_color_raw = command[54:23];
     Rgba cmd_fill_color;
     assign cmd_fill_color = '{
-        rgb: {cmd_fill_color_raw[7:0], cmd_fill_color_raw[15:8], cmd_fill_color_raw[23:16]},
+        rgb: {cmd_fill_color_raw[23:16], cmd_fill_color_raw[15:8], cmd_fill_color_raw[7:0]},
         a: cmd_fill_color_raw[31:24]
     };
 
@@ -155,21 +155,36 @@ module Spu (
         execute,
         done
     } state = done;
-    logic [9:0] cmd_cycles = 0;
+    logic [9:0] cmd_crnt_x = 0;
+    logic [9:0] cmd_end = 0;
+
+    logic [LINE_BUFFER_DATA_LANES_LOG2-1:0] crnt_draw_begin;
+    assign crnt_draw_begin = cmd_crnt_x[LINE_BUFFER_DATA_LANES_LOG2-1:0];
+    logic [LINE_BUFFER_DATA_LANES_LOG2:0] crnt_draw_end;
+
     Rgba fill_color;
 
     always_comb begin
+        if (cmd_crnt_x == cmd_end) begin
+            crnt_draw_end = '0;
+        end else if (cmd_end[LINE_BUFFER_DATA_LANES_LOG2-1:0] == '0 || cmd_crnt_x[9:LINE_BUFFER_DATA_LANES_LOG2] != cmd_end[9:LINE_BUFFER_DATA_LANES_LOG2]) begin
+            crnt_draw_end = {1'b1, {LINE_BUFFER_DATA_LANES_LOG2{1'b0}}};
+        end else begin
+            crnt_draw_end = {1'b0, cmd_end[LINE_BUFFER_DATA_LANES_LOG2-1:0]};
+        end
+        line_w_addr = cmd_crnt_x[LINE_BUFFER_LOGICAL_ADDR_WIDTH-1:LINE_BUFFER_DATA_LANES_LOG2];
+        line_w_strobe = ((1 << crnt_draw_end) - 1) & ~((1 << crnt_draw_begin) - 1);
+
         // TODO: more complex
-        line_din = fill_color;
+        lines_din = {fill_color, fill_color, fill_color, fill_color};
     end
 
     always_ff @(posedge clk) begin
-        line_w_strobe <= 0;
-
         if (x == vga::LINE) begin
             // Reset
             cmdram_r_addr <= 0;
-            cmd_cycles <= 0;
+            cmd_crnt_x <= 0;
+            cmd_end <= 0;
             state <= fetch;
             bank_sel <= !bank_sel;
         end else case (state)
@@ -181,9 +196,8 @@ module Spu (
                         state <= done;
                     end
                     SpuCommandKind::fill: begin
-                        line_w_addr <= cmd_x;
-                        line_w_strobe <= 1;
-                        cmd_cycles <= cmd_len_minus_one;
+                        cmd_crnt_x <= cmd_x;
+                        cmd_end <= cmd_x + cmd_len;
                         fill_color <= cmd_fill_color;
                         state <= execute;
                     end
@@ -191,12 +205,10 @@ module Spu (
                 cmdram_r_addr <= cmdram_r_addr + 1;
             end
             execute: begin
-                if (cmd_cycles == '0) begin
+                if (cmd_crnt_x == cmd_end) begin
                     state <= fetch;
                 end else begin
-                    line_w_addr <= line_w_addr + 1;
-                    line_w_strobe <= 1;
-                    cmd_cycles <= cmd_cycles - 1;
+                    cmd_crnt_x <= cmd_crnt_x + {{(10 - (LINE_BUFFER_DATA_LANES_LOG2 + 1)){1'b0}}, crnt_draw_end} - {{(10 - LINE_BUFFER_DATA_LANES_LOG2){1'b0}}, crnt_draw_begin};
                 end
             end
             done: ;
