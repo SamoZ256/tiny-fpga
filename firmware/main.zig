@@ -187,7 +187,7 @@ fn main() void {
                         const text = "Hello!";
                         for (0..text.len) |i| {
                             const c = text[i];
-                            span(&index, i * 8, 8, getFontVramAddr(c, 0, @intCast(line)));
+                            span(&index, i * 8 + 4 - line / 2 - 1, 8, getFontVramAddr(c, 0, @intCast(line)));
                         }
                     }
                 }

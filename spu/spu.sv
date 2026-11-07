@@ -61,13 +61,13 @@ module Spu (
     end
 
     // CRAM
-    logic [CRAM_ADDR_WIDTH-1:0] cram_r_addrs[SPU_LANES];
-    logic [CRAM_DATA_WIDTH-1:0] cram_douts[SPU_LANES];
+    logic [CRAM_ADDR_WIDTH-1:0] cram_r_addrs[LANES];
+    logic [CRAM_DATA_WIDTH-1:0] cram_douts[LANES];
     Vram #(
         .ADDR_WIDTH(CRAM_ADDR_WIDTH),
         .DATA_WIDTH(CRAM_DATA_WIDTH),
         .SIZE      (CRAM_SIZE),
-        .NUM_R_PORTS(SPU_LANES)
+        .NUM_R_PORTS(LANES)
     ) cram (
         .r_clks('{default: clk}),
         .r_addrs(cram_r_addrs),
@@ -81,21 +81,31 @@ module Spu (
 
     // VRAM
     logic [VRAM_ADDR_WIDTH-1:0] vram_r_addr;
-    logic [VRAM_DATA_WIDTH-1:0] vram_dout;
-    SinglePortVram #(
+    logic [VRAM_DATA_WIDTH-1:0] vram_douts_raw[2];
+    Vram #(
         .ADDR_WIDTH(VRAM_ADDR_WIDTH),
         .DATA_WIDTH(VRAM_DATA_WIDTH),
-        .SIZE      (VRAM_SIZE)
+        .SIZE      (VRAM_SIZE),
+        .NUM_R_PORTS(2)
     ) vram (
-        .r_clk(clk),
-        .r_addr(vram_r_addr),
-        .dout(vram_dout),
+        .r_clks({clk, clk}),
+        .r_addrs({vram_r_addr, vram_r_addr + 1}),
+        .douts(vram_douts_raw),
 
         .w_clk(cpu_clk),
         .w_addr(vram_w_addr),
         .w_strobe(vram_w_strobe),
         .din(vram_din)
     );
+
+    logic [LANES * 2 - 1:0][VRAM_LOGICAL_DATA_WIDTH-1:0] vram_douts;
+    always_comb begin
+        for (int i = 0; i < 2; i++) begin
+            for (int j = 0; j < LANES; j++) begin
+                vram_douts[i * LANES + j] = vram_douts_raw[i][VRAM_LOGICAL_DATA_WIDTH * j +:VRAM_LOGICAL_DATA_WIDTH];
+            end
+        end
+    end
 
     // Command RAM
     logic [CMDRAM_ADDR_WIDTH-1:0] cmdram_r_addr;
@@ -137,21 +147,36 @@ module Spu (
     // Command
     SpuCommandKind::Type cmd_kind;
     assign cmd_kind = SpuCommandKind::Type'(command[2:0]);
-    logic [9:0] cmd_begin_x;
-    assign cmd_begin_x = command[12:3];
-    logic [9:0] cmd_end_x;
-    assign cmd_end_x = command[22:13];
 
-    logic [31:0] cmd_fill_color_raw;
-    assign cmd_fill_color_raw = command[54:23];
-    Rgba cmd_fill_color;
-    assign cmd_fill_color = '{
-        rgb: {cmd_fill_color_raw[23:16], cmd_fill_color_raw[15:8], cmd_fill_color_raw[7:0]},
-        a: cmd_fill_color_raw[31:24]
-    };
+    typedef struct packed {
+        logic [8:0] reserved;
+        Rgba color;
+        logic [9:0] end_x;
+        logic [9:0] begin_x;
+    } FillParam;
+    FillParam fill_param;
+    assign fill_param = FillParam'(command[63:3]);
 
-    logic [VRAM_ADDR_WIDTH-1:0] cmd_vram_addr;
-    assign cmd_vram_addr = command[34:23];
+    typedef struct packed {
+        logic [27:0] reserved;
+        logic [11:0] vram_addr;
+        logic [9:0] end_x;
+        logic [9:0] begin_x;
+    } SpanParam;
+    SpanParam span_param;
+    assign span_param = SpanParam'(command[63:3]);
+
+    typedef struct packed {
+        logic [8:0] reserved;
+        logic [2:0] tile_stride_log2;
+        logic [2:0] tile_width_log2;
+        logic [13:0] tileset_vram_addr;
+        logic [7:0] tile_count;
+        logic [13:0] tilemap_vram_addr;
+        logic [9:0] begin_x;
+    } TilesParam;
+    TilesParam tiles_param;
+    assign tiles_param = TilesParam'(command[63:3]);
 
     // Command execution
     enum {
@@ -166,12 +191,12 @@ module Spu (
     logic [9:0] crnt_x = 0;
     logic [9:0] crnt_end_x = 0;
 
-    logic [SPU_LANES_LOG2-1:0] crnt_draw_begin;
-    assign crnt_draw_begin = crnt_x[SPU_LANES_LOG2-1:0];
-    logic [SPU_LANES_LOG2:0] crnt_draw_end;
+    logic [LANES_LOG2-1:0] crnt_draw_begin;
+    assign crnt_draw_begin = crnt_x[LANES_LOG2-1:0];
+    logic [LANES_LOG2:0] crnt_draw_end;
 
     logic [9:0] next_x;
-    assign next_x = crnt_x + {{(10 - (SPU_LANES_LOG2 + 1)){1'b0}}, crnt_draw_end} - {{(10 - SPU_LANES_LOG2){1'b0}}, crnt_draw_begin};
+    assign next_x = crnt_x + {{(10 - (LANES_LOG2 + 1)){1'b0}}, crnt_draw_end} - {{(10 - LANES_LOG2){1'b0}}, crnt_draw_begin};
 
     enum {
         fill,
@@ -179,11 +204,12 @@ module Spu (
         tiles
     } draw_mode = fill;
     Rgba fill_color;
+    logic [LANES_LOG2-1:0] vram_dout_offset_neg;
 
     always_comb begin
         // CRAM read
-        for (int i = 0; i < SPU_LANES; i++) begin
-            cram_r_addrs[i] = vram_dout[VRAM_LOGICAL_DATA_WIDTH * i +:VRAM_LOGICAL_DATA_WIDTH];
+        for (int i = 0; i < LANES; i++) begin
+            cram_r_addrs[i] = vram_douts[i + LANES - vram_dout_offset_neg];
         end
 
         crnt_draw_end = '0;
@@ -195,23 +221,23 @@ module Spu (
             // Line write
             if (crnt_x == crnt_end_x) begin
                 crnt_draw_end = '0;
-            end else if (crnt_end_x[SPU_LANES_LOG2-1:0] == '0 || crnt_x[9:SPU_LANES_LOG2] != crnt_end_x[9:SPU_LANES_LOG2]) begin
-                crnt_draw_end = {1'b1, {SPU_LANES_LOG2{1'b0}}};
+            end else if (crnt_end_x[LANES_LOG2-1:0] == '0 || crnt_x[9:LANES_LOG2] != crnt_end_x[9:LANES_LOG2]) begin
+                crnt_draw_end = {1'b1, {LANES_LOG2{1'b0}}};
             end else begin
-                crnt_draw_end = {1'b0, crnt_end_x[SPU_LANES_LOG2-1:0]};
+                crnt_draw_end = {1'b0, crnt_end_x[LANES_LOG2-1:0]};
             end
-            line_w_addr = crnt_x[LINE_BUFFER_LOGICAL_ADDR_WIDTH-1:SPU_LANES_LOG2];
+            line_w_addr = crnt_x[LINE_BUFFER_LOGICAL_ADDR_WIDTH-1:LANES_LOG2];
             line_w_strobe = ((1 << crnt_draw_end) - 1) & ~((1 << crnt_draw_begin) - 1);
 
             // Line input
             case (draw_mode)
                 fill: begin
-                    for (int i = 0; i < SPU_LANES; i++) begin
+                    for (int i = 0; i < LANES; i++) begin
                         lines_din[i] = fill_color;
                     end
                 end
                 span: begin
-                    for (int i = 0; i < SPU_LANES; i++) begin
+                    for (int i = 0; i < LANES; i++) begin
                         lines_din[i] = Rgba'(cram_douts[i]);
                     end
                 end
@@ -243,22 +269,24 @@ module Spu (
                         state <= done;
                     end
                     SpuCommandKind::fill: begin
-                        crnt_x <= cmd_begin_x;
-                        crnt_end_x <= cmd_end_x;
+                        crnt_x <= fill_param.begin_x;
+                        crnt_end_x <= fill_param.end_x;
                         draw_mode <= fill;
-                        fill_color <= cmd_fill_color;
+                        fill_color <= fill_param.color;
                         state <= execute;
-                        cmdram_r_addr <= cmdram_r_addr + 1;
                     end
                     SpuCommandKind::span: begin
-                        crnt_x <= cmd_begin_x;
-                        crnt_end_x <= cmd_end_x;
+                        crnt_x <= span_param.begin_x;
+                        crnt_end_x <= span_param.end_x;
                         draw_mode <= span;
-                        vram_r_addr <= cmd_vram_addr; // TODO: support misaligned VRAM reads
+                        vram_r_addr <= span_param.vram_addr - 1;
+                        vram_dout_offset_neg <= span_param.begin_x[LANES_LOG2-1:0];
                         mem_counter <= 1; // Wait for the memory to get fetched
                         state <= mem;
                     end
                 endcase
+
+                // Increment
                 cmdram_r_addr <= cmdram_r_addr + 1;
             end
             mem: begin
