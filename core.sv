@@ -69,12 +69,12 @@ module core (
     // SPU
     logic [spu::CRAM_ADDR_WIDTH-1:0] cram_w_addr;
     assign cram_w_addr = ram_addr[spu::CRAM_ADDR_WIDTH-1:0];
-    logic [2:0] cram_w_strobe;
+    logic [3:0] cram_w_strobe;
     logic [spu::CRAM_DATA_WIDTH-1:0] cram_din;
 
     logic [spu::VRAM_ADDR_WIDTH-1:0] vram_w_addr;
     assign vram_w_addr = ram_addr[spu::VRAM_ADDR_WIDTH-1:0];
-    logic vram_w_strobe;
+    logic [3:0] vram_w_strobe;
     logic [spu::VRAM_DATA_WIDTH-1:0] vram_din;
 
     logic [spu::CMDRAM_ADDR_WIDTH-1:0] cmdram_w_addr;
@@ -155,10 +155,10 @@ module core (
         cmdram_din = '0;
 
         if (ram_addr >= MMIO_CRAM_ADDR && ram_addr < MMIO_CRAM_ADDR + spu::CRAM_SIZE) begin
-            cram_w_strobe = ram_w_strobe[2:0];
+            cram_w_strobe = ram_w_strobe[3:0];
             cram_din = ram_din[spu::CRAM_DATA_WIDTH-1:0];
         end else if (ram_addr >= MMIO_VRAM_ADDR && ram_addr < MMIO_VRAM_ADDR + spu::VRAM_SIZE) begin
-            vram_w_strobe = ram_w_strobe[0];
+            vram_w_strobe = ram_w_strobe;
             vram_din = ram_din[spu::VRAM_DATA_WIDTH-1:0];
         end else if (ram_addr >= MMIO_CMDRAM_ADDR && ram_addr < MMIO_CMDRAM_ADDR + spu::CMDRAM_SIZE * 2) begin
             if (ram_addr[0]) begin

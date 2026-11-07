@@ -6,7 +6,7 @@ pub const SCREEN = 524;
 pub fn multiplyNormalized8x8(a: u8, b: u8) u8 {
     const product1 = @as(u16, @intCast(a)) * @as(u16, @intCast(b)) + 128;
     const product2 = product1 + (product1 >> 8);
-    return product2 >> 8;
+    return @intCast(product2 >> 8);
 }
 
 pub const Rgba = struct {

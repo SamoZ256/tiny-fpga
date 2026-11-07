@@ -22,15 +22,15 @@ pub fn waitForNextLine() u10 {
 
 pub const CramAddr = u8;
 
-pub fn writeCram(index: CramAddr, color: u24) void {
-    const ptr = @as(*volatile u32, @ptrFromInt(0x24000000 + @as(u32, @intCast(index)) * 4));
+pub fn writeCram(addr: CramAddr, color: u32) void {
+    const ptr = @as(*volatile u32, @ptrFromInt(0x24000000 + @as(u32, @intCast(addr)) * 4));
     ptr.* = color;
 }
 
 pub const VramAddr = u14;
 
-pub fn writeVram(index: VramAddr, value: u8) void {
-    const ptr = @as(*volatile u32, @ptrFromInt(0x28000000 + @as(u32, @intCast(index)) * 4));
+pub fn writeVram(addr: VramAddr, value: u8) void {
+    const ptr = @as(*volatile u8, @ptrFromInt(0x28000000 + @as(u32, @intCast(addr))));
     ptr.* = value;
 }
 

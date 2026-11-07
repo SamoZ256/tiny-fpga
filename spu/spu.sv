@@ -7,7 +7,7 @@ package SpuCommandKind;
         begin_line = 3'b000, // TODO: implement
         end_line = 3'b001,
         fill = 3'b010,
-        span = 3'b011, // TODO: implement
+        span = 3'b011,
         tiles = 3'b100 // TODO: implement
     } Type;
 endpackage
@@ -17,11 +17,11 @@ module Spu (
     input logic cpu_clk,
 
     input logic [CRAM_ADDR_WIDTH-1:0] cram_w_addr,
-    input logic [2:0] cram_w_strobe,
+    input logic [3:0] cram_w_strobe,
     input logic [CRAM_DATA_WIDTH-1:0] cram_din,
 
     input logic [VRAM_ADDR_WIDTH-1:0] vram_w_addr,
-    input logic vram_w_strobe,
+    input logic [3:0] vram_w_strobe,
     input logic [VRAM_DATA_WIDTH-1:0] vram_din,
 
     input logic [CMDRAM_ADDR_WIDTH-1:0] cmdram_w_addr,
@@ -61,16 +61,17 @@ module Spu (
     end
 
     // CRAM
-    wire [CRAM_ADDR_WIDTH-1:0] cram_r_addr;
-    wire [CRAM_DATA_WIDTH-1:0] cram_dout;
-    SinglePortVram #(
+    logic [CRAM_ADDR_WIDTH-1:0] cram_r_addrs[SPU_LANES];
+    logic [CRAM_DATA_WIDTH-1:0] cram_douts[SPU_LANES];
+    Vram #(
         .ADDR_WIDTH(CRAM_ADDR_WIDTH),
         .DATA_WIDTH(CRAM_DATA_WIDTH),
-        .SIZE      (CRAM_SIZE)
+        .SIZE      (CRAM_SIZE),
+        .NUM_R_PORTS(SPU_LANES)
     ) cram (
-        .r_clk(clk),
-        .r_addr(cram_r_addr),
-        .dout(cram_dout),
+        .r_clks('{default: clk}),
+        .r_addrs(cram_r_addrs),
+        .douts(cram_douts),
 
         .w_clk(cpu_clk),
         .w_addr(cram_w_addr),
@@ -80,7 +81,7 @@ module Spu (
 
     // VRAM
     logic [VRAM_ADDR_WIDTH-1:0] vram_r_addr;
-    wire [VRAM_DATA_WIDTH-1:0] vram_dout;
+    logic [VRAM_DATA_WIDTH-1:0] vram_dout;
     SinglePortVram #(
         .ADDR_WIDTH(VRAM_ADDR_WIDTH),
         .DATA_WIDTH(VRAM_DATA_WIDTH),
@@ -98,7 +99,7 @@ module Spu (
 
     // Command RAM
     logic [CMDRAM_ADDR_WIDTH-1:0] cmdram_r_addr;
-    wire [COMMAND_SIZE-1:0] cmdram_douts_raw[2];
+    logic [COMMAND_SIZE-1:0] cmdram_douts_raw[2];
     for (genvar i = 0; i < 2; i++) begin : cmdram
         SinglePortVram #(
             .ADDR_WIDTH(CMDRAM_ADDR_WIDTH),
@@ -121,8 +122,8 @@ module Spu (
 
     // Line buffer
     RgbaLanes lines_din;
-    LanesAddr line_w_addr;
-    LanesWStrobe line_w_strobe;
+    LineBufferLanesAddr line_w_addr;
+    LineBufferLanesWStrobe line_w_strobe;
     SpuLineBuffer line_buffer(
         .clk(clk),
         .bank_sel(bank_sel),
@@ -140,6 +141,7 @@ module Spu (
     assign cmd_begin_x = command[12:3];
     logic [9:0] cmd_end_x;
     assign cmd_end_x = command[22:13];
+
     logic [31:0] cmd_fill_color_raw;
     assign cmd_fill_color_raw = command[54:23];
     Rgba cmd_fill_color;
@@ -148,47 +150,92 @@ module Spu (
         a: cmd_fill_color_raw[31:24]
     };
 
+    logic [VRAM_ADDR_WIDTH-1:0] cmd_vram_addr;
+    assign cmd_vram_addr = command[34:23];
+
     // Command execution
     enum {
         fetch,
         decode,
+        mem,
         execute,
         done
     } state = done;
-    logic [9:0] cmd_crnt_x = 0;
-    logic [9:0] cmd_crnt_end_x = 0;
+    logic [1:0] mem_counter = 0;
 
-    logic [LINE_BUFFER_DATA_LANES_LOG2-1:0] crnt_draw_begin;
-    assign crnt_draw_begin = cmd_crnt_x[LINE_BUFFER_DATA_LANES_LOG2-1:0];
-    logic [LINE_BUFFER_DATA_LANES_LOG2:0] crnt_draw_end;
+    logic [9:0] crnt_x = 0;
+    logic [9:0] crnt_end_x = 0;
 
+    logic [SPU_LANES_LOG2-1:0] crnt_draw_begin;
+    assign crnt_draw_begin = crnt_x[SPU_LANES_LOG2-1:0];
+    logic [SPU_LANES_LOG2:0] crnt_draw_end;
+
+    logic [9:0] next_x;
+    assign next_x = crnt_x + {{(10 - (SPU_LANES_LOG2 + 1)){1'b0}}, crnt_draw_end} - {{(10 - SPU_LANES_LOG2){1'b0}}, crnt_draw_begin};
+
+    enum {
+        fill,
+        span,
+        tiles
+    } draw_mode = fill;
     Rgba fill_color;
 
     always_comb begin
-        if (cmd_crnt_x == cmd_crnt_end_x) begin
-            crnt_draw_end = '0;
-        end else if (cmd_crnt_end_x[LINE_BUFFER_DATA_LANES_LOG2-1:0] == '0 || cmd_crnt_x[9:LINE_BUFFER_DATA_LANES_LOG2] != cmd_crnt_end_x[9:LINE_BUFFER_DATA_LANES_LOG2]) begin
-            crnt_draw_end = {1'b1, {LINE_BUFFER_DATA_LANES_LOG2{1'b0}}};
-        end else begin
-            crnt_draw_end = {1'b0, cmd_crnt_end_x[LINE_BUFFER_DATA_LANES_LOG2-1:0]};
+        // CRAM read
+        for (int i = 0; i < SPU_LANES; i++) begin
+            cram_r_addrs[i] = vram_dout[VRAM_LOGICAL_DATA_WIDTH * i +:VRAM_LOGICAL_DATA_WIDTH];
         end
-        line_w_addr = cmd_crnt_x[LINE_BUFFER_LOGICAL_ADDR_WIDTH-1:LINE_BUFFER_DATA_LANES_LOG2];
-        line_w_strobe = ((1 << crnt_draw_end) - 1) & ~((1 << crnt_draw_begin) - 1);
 
-        // TODO: more complex
-        lines_din = {fill_color, fill_color, fill_color, fill_color};
+        crnt_draw_end = '0;
+        line_w_addr = '0;
+        line_w_strobe = '0;
+        lines_din = '{default: '0};
+
+        if (state == execute) begin
+            // Line write
+            if (crnt_x == crnt_end_x) begin
+                crnt_draw_end = '0;
+            end else if (crnt_end_x[SPU_LANES_LOG2-1:0] == '0 || crnt_x[9:SPU_LANES_LOG2] != crnt_end_x[9:SPU_LANES_LOG2]) begin
+                crnt_draw_end = {1'b1, {SPU_LANES_LOG2{1'b0}}};
+            end else begin
+                crnt_draw_end = {1'b0, crnt_end_x[SPU_LANES_LOG2-1:0]};
+            end
+            line_w_addr = crnt_x[LINE_BUFFER_LOGICAL_ADDR_WIDTH-1:SPU_LANES_LOG2];
+            line_w_strobe = ((1 << crnt_draw_end) - 1) & ~((1 << crnt_draw_begin) - 1);
+
+            // Line input
+            case (draw_mode)
+                fill: begin
+                    for (int i = 0; i < SPU_LANES; i++) begin
+                        lines_din[i] = fill_color;
+                    end
+                end
+                span: begin
+                    for (int i = 0; i < SPU_LANES; i++) begin
+                        lines_din[i] = Rgba'(cram_douts[i]);
+                    end
+                end
+            endcase
+        end
     end
 
     always_ff @(posedge clk) begin
+        // VRAM advance
+        case (draw_mode)
+            span: begin
+                vram_r_addr <= vram_r_addr + 1;
+            end
+        endcase
+
         if (x == vga::LINE) begin
             // Reset
             cmdram_r_addr <= 0;
-            cmd_crnt_x <= 0;
-            cmd_crnt_end_x <= 0;
+            mem_counter <= 0;
+            crnt_x <= 0;
+            crnt_end_x <= 0;
             state <= fetch;
             bank_sel <= !bank_sel;
         end else case (state)
-            // Next command
             fetch: state <= decode; // Wait 1 cycle for the data
             decode: begin
                 case (cmd_kind)
@@ -196,19 +243,36 @@ module Spu (
                         state <= done;
                     end
                     SpuCommandKind::fill: begin
-                        cmd_crnt_x <= cmd_begin_x;
-                        cmd_crnt_end_x <= cmd_end_x;
+                        crnt_x <= cmd_begin_x;
+                        crnt_end_x <= cmd_end_x;
+                        draw_mode <= fill;
                         fill_color <= cmd_fill_color;
                         state <= execute;
+                        cmdram_r_addr <= cmdram_r_addr + 1;
+                    end
+                    SpuCommandKind::span: begin
+                        crnt_x <= cmd_begin_x;
+                        crnt_end_x <= cmd_end_x;
+                        draw_mode <= span;
+                        vram_r_addr <= cmd_vram_addr; // TODO: support misaligned VRAM reads
+                        mem_counter <= 1; // Wait for the memory to get fetched
+                        state <= mem;
                     end
                 endcase
                 cmdram_r_addr <= cmdram_r_addr + 1;
             end
-            execute: begin
-                if (cmd_crnt_x == cmd_crnt_end_x) begin
-                    state <= fetch;
+            mem: begin
+                if (mem_counter == '0) begin
+                    state <= execute;
                 end else begin
-                    cmd_crnt_x <= cmd_crnt_x + {{(10 - (LINE_BUFFER_DATA_LANES_LOG2 + 1)){1'b0}}, crnt_draw_end} - {{(10 - LINE_BUFFER_DATA_LANES_LOG2){1'b0}}, crnt_draw_begin};
+                    mem_counter <= mem_counter - 1;
+                end
+            end
+            execute: begin
+                if (next_x == crnt_end_x) begin
+                    state <= decode; // We can skip directly to decode
+                end else begin
+                    crnt_x <= next_x;
                 end
             end
             done: ;

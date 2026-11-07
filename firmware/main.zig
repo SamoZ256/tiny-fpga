@@ -60,7 +60,7 @@ fn initializeFontVram() void {
     for (0..char_count) |char| {
         for (0..char_height) |y| {
             for (0..char_width) |x| {
-                mmio.writeVram(getFontVramAddr(@intCast(char), @intCast(x), @intCast(y)), if (getPixel(@intCast(char), @intCast(x), @intCast(y))) 0xbf else 0);
+                mmio.writeVram(getFontVramAddr(@intCast(char), @intCast(x), @intCast(y)), if (getPixel(@intCast(char), @intCast(x), @intCast(y))) 3 else 1);
             }
         }
     }
@@ -74,12 +74,12 @@ fn main() void {
     // SPU
 
     // Palette
-    mmio.writeCram(0, 0xff00ff);
-    mmio.writeCram(1, 0x000000);
-    mmio.writeCram(2, 0xffffff);
-    mmio.writeCram(3, 0x0000ff);
-    mmio.writeCram(4, 0x00ff00);
-    mmio.writeCram(5, 0xff0000);
+    mmio.writeCram(0, common.Rgba.initPremultiplied(0xff, 0x00, 0xff, 0xff).toRawBits());
+    mmio.writeCram(1, common.Rgba.initPremultiplied(0x00, 0x00, 0x00, 0x00).toRawBits());
+    mmio.writeCram(2, common.Rgba.initPremultiplied(0xff, 0xff, 0xff, 0xff).toRawBits());
+    mmio.writeCram(3, common.Rgba.initPremultiplied(0xff, 0x00, 0x00, 0xff).toRawBits());
+    mmio.writeCram(4, common.Rgba.initPremultiplied(0x00, 0xff, 0x00, 0xff).toRawBits());
+    mmio.writeCram(5, common.Rgba.initPremultiplied(0x00, 0x00, 0xff, 0xff).toRawBits());
 
     // Font
     initializeFontVram();
@@ -93,14 +93,38 @@ fn main() void {
 
         // Draw
         const Draw = struct {
-            const Kind = enum(u3) { end_line = 1, fill = 2 };
+            const Kind = enum(u3) { end_line = 1, fill = 2, span = 3 };
 
             const Command = packed struct(u64) {
                 kind: Kind,
-                begin_x: u10 = 0,
-                end_x: u10 = 0,
-                color: u32 = 0,
-                reserved: u9 = 0,
+                param: u61 = 0,
+
+                pub fn endLine() Command {
+                    return .{ .kind = .end_line };
+                }
+
+                const Fill = packed struct(u61) {
+                    begin_x: u10,
+                    end_x: u10,
+                    color: u32,
+                    reserved: u9 = 0,
+                };
+
+                pub fn fill(begin_x: u10, end_x: u10, color: u32) Command {
+                    return .{ .kind = .fill, .param = @bitCast(Fill{.begin_x = begin_x, .end_x = end_x, .color = color}) };
+                }
+
+                const Span = packed struct(u61) {
+                    begin_x: u10,
+                    end_x: u10,
+                    vram_addr_13_2: u12,
+                    reserved: u29 = 0,
+                };
+
+                pub fn span(begin_x: u10, end_x: u10, vram_addr: mmio.VramAddr) Command {
+                    // TODO: assert that 2 LSB of vram_addr are 0
+                    return .{ .kind = .span, .param = @bitCast(Span{.begin_x = begin_x, .end_x = end_x, .vram_addr_13_2 = @intCast(vram_addr >> 2)}) };
+                }
             };
 
             const ground_y = 440;
@@ -134,7 +158,12 @@ fn main() void {
             }
 
             inline fn fill(index: *mmio.CmdramAddr, x: u32, len: u32, color: common.Rgba) void {
-                mmio.writeCmdram(index.*, @bitCast(Command{ .kind = .fill, .begin_x = @intCast(x), .end_x = @intCast(x + len), .color = color.toRawBits() }));
+                mmio.writeCmdram(index.*, @bitCast(Command.fill(@intCast(x), @intCast(x + len), color.toRawBits())));
+                index.* += 1;
+            }
+
+            inline fn span(index: *mmio.CmdramAddr, x: u32, len: u32, vram_addr: mmio.VramAddr) void {
+                mmio.writeCmdram(index.*, @bitCast(Command.span(@intCast(x), @intCast(x + len), vram_addr)));
                 index.* += 1;
             }
 
@@ -152,8 +181,17 @@ fn main() void {
                         const x1: u32 = @intCast(ball_x + half_width + 1);
                         fill(&index, x0, x1 - x0, ball_color);
                     }
+
+                    // Text
+                    if (line < 8) {
+                        const text = "Hello!";
+                        for (0..text.len) |i| {
+                            const c = text[i];
+                            span(&index, i * 8, 8, getFontVramAddr(c, 0, @intCast(line)));
+                        }
+                    }
                 }
-                mmio.writeCmdram(index, @bitCast(Command{ .kind = .end_line }));
+                mmio.writeCmdram(index, @bitCast(Command.endLine()));
             }
         };
 
