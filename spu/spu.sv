@@ -167,12 +167,12 @@ module Spu (
     assign span_param = SpanParam'(command[63:3]);
 
     typedef struct packed {
-        logic [8:0] reserved;
+        logic [12:0] reserved;
         logic [2:0] tile_stride_log2;
         logic [2:0] tile_width_log2;
-        logic [13:0] tileset_vram_addr;
+        logic [11:0] tileset_vram_addr;
         logic [7:0] tile_count;
-        logic [13:0] tilemap_vram_addr;
+        logic [11:0] tilemap_vram_addr;
         logic [9:0] begin_x;
     } TilesParam;
     TilesParam tiles_param;
@@ -180,12 +180,11 @@ module Spu (
 
     // Command execution
     enum {
-        fetch,
-        decode,
-        mem,
-        execute,
-        done
-    } state = done;
+        State_fetch,
+        State_decode,
+        State_wait,
+        State_span
+    } state = State_wait;
     logic [1:0] mem_counter = 0;
 
     logic [9:0] crnt_x = 0;
@@ -199,12 +198,14 @@ module Spu (
     assign next_x = crnt_x + {{(10 - (LANES_LOG2 + 1)){1'b0}}, crnt_draw_end} - {{(10 - LANES_LOG2){1'b0}}, crnt_draw_begin};
 
     enum {
-        fill,
-        span,
-        tiles
-    } draw_mode = fill;
+        DrawMode_fill,
+        DrawMode_span,
+        DrawMode_tiles
+    } draw_mode = DrawMode_fill;
     Rgba fill_color;
     logic [LANES_LOG2-1:0] vram_dout_offset_neg;
+
+    logic draw_enable = 0;
 
     always_comb begin
         // CRAM read
@@ -217,7 +218,7 @@ module Spu (
         line_w_strobe = '0;
         lines_din = '{default: '0};
 
-        if (state == execute) begin
+        if (draw_enable) begin
             // Line write
             if (crnt_x == crnt_end_x) begin
                 crnt_draw_end = '0;
@@ -231,12 +232,12 @@ module Spu (
 
             // Line input
             case (draw_mode)
-                fill: begin
+                DrawMode_fill: begin
                     for (int i = 0; i < LANES; i++) begin
                         lines_din[i] = fill_color;
                     end
                 end
-                span: begin
+                DrawMode_span: begin
                     for (int i = 0; i < LANES; i++) begin
                         lines_din[i] = Rgba'(cram_douts[i]);
                     end
@@ -246,64 +247,68 @@ module Spu (
     end
 
     always_ff @(posedge clk) begin
-        // VRAM advance
-        case (draw_mode)
-            span: begin
-                vram_r_addr <= vram_r_addr + 1;
-            end
-        endcase
-
         if (x == vga::LINE) begin
             // Reset
             cmdram_r_addr <= 0;
             mem_counter <= 0;
             crnt_x <= 0;
             crnt_end_x <= 0;
-            state <= fetch;
+            draw_enable <= 0;
+            state <= State_fetch;
             bank_sel <= !bank_sel;
-        end else case (state)
-            fetch: state <= decode; // Wait 1 cycle for the data
-            decode: begin
-                case (cmd_kind)
-                    SpuCommandKind::end_line: begin
-                        state <= done;
-                    end
-                    SpuCommandKind::fill: begin
-                        crnt_x <= fill_param.begin_x;
-                        crnt_end_x <= fill_param.end_x;
-                        draw_mode <= fill;
-                        fill_color <= fill_param.color;
-                        state <= execute;
-                    end
-                    SpuCommandKind::span: begin
-                        crnt_x <= span_param.begin_x;
-                        crnt_end_x <= span_param.end_x;
-                        draw_mode <= span;
-                        vram_r_addr <= span_param.vram_addr - 1;
-                        vram_dout_offset_neg <= span_param.begin_x[LANES_LOG2-1:0];
-                        mem_counter <= 1; // Wait for the memory to get fetched
-                        state <= mem;
-                    end
-                endcase
+        end else begin
+            case (state)
+                State_fetch: state <= State_decode; // Wait 1 cycle for the data
+                State_decode: begin
+                    case (cmd_kind)
+                        SpuCommandKind::end_line: begin
+                            state <= State_wait;
+                        end
+                        SpuCommandKind::fill: begin
+                            crnt_x <= fill_param.begin_x;
+                            crnt_end_x <= fill_param.end_x;
+                            draw_mode <= DrawMode_fill;
+                            fill_color <= fill_param.color;
+                            draw_enable <= 1;
+                            state <= State_wait;
+                        end
+                        SpuCommandKind::span: begin
+                            crnt_x <= span_param.begin_x;
+                            crnt_end_x <= span_param.end_x;
+                            draw_mode <= DrawMode_span;
+                            vram_r_addr <= span_param.vram_addr - 1;
+                            vram_dout_offset_neg <= span_param.begin_x[LANES_LOG2-1:0];
+                            mem_counter <= 1; // Wait for the memory to get fetched
+                            state <= State_span;
+                        end
+                    endcase
 
-                // Increment
-                cmdram_r_addr <= cmdram_r_addr + 1;
-            end
-            mem: begin
-                if (mem_counter == '0) begin
-                    state <= execute;
-                end else begin
-                    mem_counter <= mem_counter - 1;
+                    // Increment
+                    cmdram_r_addr <= cmdram_r_addr + 1;
                 end
-            end
-            execute: begin
+                State_span: begin
+                    if (mem_counter == 0) begin
+                        draw_enable <= 1;
+                    end else begin
+                        mem_counter <= mem_counter - 1;
+                    end
+
+                    // VRAM advance
+                    vram_r_addr <= vram_r_addr + 1;
+                end
+                State_wait: ;
+            endcase
+
+            if (draw_enable) begin
                 if (next_x == crnt_end_x) begin
-                    state <= decode; // We can skip directly to decode
+                    crnt_x <= 0;
+                    crnt_end_x <= 0;
+                    draw_enable <= 0;
+                    state <= State_decode; // We can skip directly to decode (TODO: this can cause issues with blending, as the timing is very tight)
                 end else begin
                     crnt_x <= next_x;
                 end
             end
-            done: ;
-        endcase
+        end
     end
 endmodule
