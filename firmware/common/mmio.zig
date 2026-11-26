@@ -27,7 +27,7 @@ pub fn writeCram(addr: CramAddr, color: u32) void {
     ptr.* = color;
 }
 
-pub const VramAddr = u14;
+pub const VramAddr = u15;
 
 pub fn writeVram(addr: VramAddr, value: u8) void {
     const ptr = @as(*volatile u8, @ptrFromInt(0x28000000 + @as(u32, @intCast(addr))));

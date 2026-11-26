@@ -179,12 +179,15 @@ module Spu (
     assign tiles_param = TilesParam'(command[63:3]);
 
     // Command execution
-    enum {
+    typedef enum {
         State_fetch,
         State_decode,
         State_wait,
-        State_span
-    } state = State_wait;
+        State_span_fetch,
+        State_tiles_fetch
+    } State;
+    State state = State_wait;
+    State draw_end_return_state;
     logic [1:0] mem_counter = 0;
 
     logic [9:0] crnt_x = 0;
@@ -198,10 +201,9 @@ module Spu (
     assign next_x = crnt_x + {{(10 - (LANES_LOG2 + 1)){1'b0}}, crnt_draw_end} - {{(10 - LANES_LOG2){1'b0}}, crnt_draw_begin};
 
     enum {
-        DrawMode_fill,
-        DrawMode_span,
-        DrawMode_tiles
-    } draw_mode = DrawMode_fill;
+        DrawSource_constant,
+        DrawSource_mem
+    } draw_source = DrawSource_constant;
     Rgba fill_color;
     logic [LANES_LOG2-1:0] vram_dout_offset_neg;
 
@@ -231,13 +233,13 @@ module Spu (
             line_w_strobe = ((1 << crnt_draw_end) - 1) & ~((1 << crnt_draw_begin) - 1);
 
             // Line input
-            case (draw_mode)
-                DrawMode_fill: begin
+            case (draw_source)
+                DrawSource_constant: begin
                     for (int i = 0; i < LANES; i++) begin
                         lines_din[i] = fill_color;
                     end
                 end
-                DrawMode_span: begin
+                DrawSource_mem: begin
                     for (int i = 0; i < LANES; i++) begin
                         lines_din[i] = Rgba'(cram_douts[i]);
                     end
@@ -257,6 +259,9 @@ module Spu (
             state <= State_fetch;
             bank_sel <= !bank_sel;
         end else begin
+            // VRAM advance
+            vram_r_addr <= vram_r_addr + 1;
+
             case (state)
                 State_fetch: state <= State_decode; // Wait 1 cycle for the data
                 State_decode: begin
@@ -267,34 +272,50 @@ module Spu (
                         SpuCommandKind::fill: begin
                             crnt_x <= fill_param.begin_x;
                             crnt_end_x <= fill_param.end_x;
-                            draw_mode <= DrawMode_fill;
+                            draw_source <= DrawSource_constant;
                             fill_color <= fill_param.color;
                             draw_enable <= 1;
                             state <= State_wait;
+                            draw_end_return_state <= State_fetch;
                         end
                         SpuCommandKind::span: begin
                             crnt_x <= span_param.begin_x;
                             crnt_end_x <= span_param.end_x;
-                            draw_mode <= DrawMode_span;
+                            draw_source <= DrawSource_mem;
                             vram_r_addr <= span_param.vram_addr - 1;
                             vram_dout_offset_neg <= span_param.begin_x[LANES_LOG2-1:0];
                             mem_counter <= 1; // Wait for the memory to get fetched
-                            state <= State_span;
+                            state <= State_span_fetch;
+                            draw_end_return_state <= State_fetch;
+                        end
+                        SpuCommandKind::tiles: begin
+                            crnt_x <= tiles_param.begin_x;
+                            draw_source <= DrawSource_mem;
+                            vram_r_addr <= tiles_param.tilemap_vram_addr;
+                            vram_dout_offset_neg <= tiles_param.begin_x[LANES_LOG2-1:0];
+                            mem_counter <= 1; // Wait for the memory to get fetched
+                            state <= State_tiles_fetch;
+                            draw_end_return_state <= State_fetch; // TODO
                         end
                     endcase
-
-                    // Increment
-                    cmdram_r_addr <= cmdram_r_addr + 1;
                 end
-                State_span: begin
+                State_span_fetch: begin
                     if (mem_counter == 0) begin
                         draw_enable <= 1;
+                        state <= State_wait;
                     end else begin
                         mem_counter <= mem_counter - 1;
                     end
-
-                    // VRAM advance
-                    vram_r_addr <= vram_r_addr + 1;
+                end
+                State_tiles_fetch: begin
+                    if (mem_counter == 0) begin
+                        vram_r_addr <= tiles_param.tileset_vram_addr + ({4'b0, vram_douts[0]} << tiles_param.tile_stride_log2) - 1;
+                        crnt_end_x <= crnt_x + (1 << tiles_param.tile_width_log2);
+                        mem_counter <= 1;
+                        state <= State_span_fetch;
+                    end else begin
+                        mem_counter <= mem_counter - 1;
+                    end
                 end
                 State_wait: ;
             endcase
@@ -304,7 +325,8 @@ module Spu (
                     crnt_x <= 0;
                     crnt_end_x <= 0;
                     draw_enable <= 0;
-                    state <= State_decode; // We can skip directly to decode (TODO: this can cause issues with blending, as the timing is very tight)
+                    cmdram_r_addr <= cmdram_r_addr + 1;
+                    state <= draw_end_return_state;
                 end else begin
                     crnt_x <= next_x;
                 end
