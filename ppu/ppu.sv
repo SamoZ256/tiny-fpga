@@ -1,8 +1,8 @@
-// Scanline processing unit
+// Picture processing unit
 
-import spu::*;
+import ppu::*;
 
-package SpuCommandKind;
+package PpuCommandKind;
     typedef enum logic [2:0] {
         begin_line = 3'b000,  // TODO: implement
         end_line = 3'b001,
@@ -12,7 +12,7 @@ package SpuCommandKind;
     } Type;
 endpackage
 
-module Spu (
+module Ppu (
     input logic clk,
     input logic cpu_clk,
 
@@ -128,7 +128,7 @@ module Spu (
     RgbaLanes lines_din;
     LineBufferLanesAddr line_w_addr;
     LineBufferLanesWStrobe line_w_strobe;
-    SpuLineBuffer line_buffer (
+    PpuLineBuffer line_buffer (
         .clk(clk),
         .bank_sel(bank_sel),
         .r_addr(x),
@@ -139,8 +139,8 @@ module Spu (
     );
 
     // Command
-    SpuCommandKind::Type cmd_kind;
-    assign cmd_kind = SpuCommandKind::Type'(command[2:0]);
+    PpuCommandKind::Type cmd_kind;
+    assign cmd_kind = PpuCommandKind::Type'(command[2:0]);
 
     typedef struct packed {
         logic [8:0] reserved;
@@ -285,10 +285,10 @@ module Spu (
             case (state)
                 State_decode: begin
                     case (cmd_kind)
-                        SpuCommandKind::end_line: begin
+                        PpuCommandKind::end_line: begin
                             state <= State_wait;
                         end
-                        SpuCommandKind::fill: begin
+                        PpuCommandKind::fill: begin
                             crnt_x <= fill_param.begin_x;
                             crnt_end_x <= fill_param.end_x;
                             draw_source <= DrawSource_constant;
@@ -297,13 +297,13 @@ module Spu (
                             state <= State_wait;
                             draw_end_return_state <= State_decode;
                         end
-                        SpuCommandKind::span: begin
+                        PpuCommandKind::span: begin
                             span <= span_param.span;
                             draw_source <= DrawSource_mem;
                             state <= State_span_prepare;
                             draw_end_return_state <= State_decode;
                         end
-                        SpuCommandKind::tiles: begin
+                        PpuCommandKind::tiles: begin
                             draw_source <= DrawSource_mem;
                             tiles_param <= TilesParam'(command[63:3]);
                             tile <= 0;

@@ -1,4 +1,4 @@
-module SpuMultiplierNormalized8 (
+module PpuMultiplierNormalized8 (
     input logic [7:0] a,
     input logic [7:0] b,
 

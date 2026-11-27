@@ -1,6 +1,6 @@
-import spu::*;
+import ppu::*;
 
-module SpuLineBuffer (
+module PpuLineBuffer (
     input logic clk,
 
     input logic bank_sel,
@@ -99,7 +99,7 @@ module SpuLineBuffer (
     for (genvar i = 0; i < LANES; i++) begin : color_resolvers
         Rgb crnt_blend_dout;
         assign crnt_blend_dout = blend_dout[i];
-        SpuColorResolver color_resolver(
+        PpuColorResolver color_resolver(
             .clk(clk),
             .src(din_delayed1[i]),
            	.dst(crnt_blend_dout),

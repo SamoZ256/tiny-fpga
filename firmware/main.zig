@@ -69,7 +69,7 @@ fn main() void {
     //const screen_width = readScreenWidth();
     //const screen_height = readScreenHeight();
 
-    // SPU
+    // PPU
 
     // Palette
     mmio.writeCram(0, common.Rgba.initPremultiplied(0xff, 0x00, 0xff, 0xff).toRawBits());

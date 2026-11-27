@@ -1,7 +1,7 @@
-import spu::*;
+import ppu::*;
 
 // NOTE: latency is 1 cycle
-module SpuColorResolver (
+module PpuColorResolver (
     input logic clk,
 
     input Rgba src, // Premultiplied
@@ -15,7 +15,7 @@ module SpuColorResolver (
     // Color
     Rgb dst_scaled;
     for (genvar i = 0; i < 3; i++) begin : multipliers
-        SpuMultiplierNormalized8 dst_multiplier(
+        PpuMultiplierNormalized8 dst_multiplier(
             .a(dst[i]),
             .b(one_minus_src_a),
             .res(dst_scaled[i])

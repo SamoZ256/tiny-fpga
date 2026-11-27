@@ -66,25 +66,25 @@ module core (
 
     // Display
 
-    // SPU
-    logic [spu::CRAM_ADDR_WIDTH-1:0] cram_w_addr;
-    assign cram_w_addr = ram_addr[spu::CRAM_ADDR_WIDTH-1:0];
+    // PPU
+    logic [ppu::CRAM_ADDR_WIDTH-1:0] cram_w_addr;
+    assign cram_w_addr = ram_addr[ppu::CRAM_ADDR_WIDTH-1:0];
     logic [3:0] cram_w_strobe;
-    logic [spu::CRAM_DATA_WIDTH-1:0] cram_din;
+    logic [ppu::CRAM_DATA_WIDTH-1:0] cram_din;
 
-    logic [spu::VRAM_ADDR_WIDTH-1:0] vram_w_addr;
-    assign vram_w_addr = ram_addr[spu::VRAM_ADDR_WIDTH-1:0];
+    logic [ppu::VRAM_ADDR_WIDTH-1:0] vram_w_addr;
+    assign vram_w_addr = ram_addr[ppu::VRAM_ADDR_WIDTH-1:0];
     logic [3:0] vram_w_strobe;
-    logic [spu::VRAM_DATA_WIDTH-1:0] vram_din;
+    logic [ppu::VRAM_DATA_WIDTH-1:0] vram_din;
 
-    logic [spu::CMDRAM_ADDR_WIDTH-1:0] cmdram_w_addr;
-    assign cmdram_w_addr = ram_addr[spu::CMDRAM_ADDR_WIDTH:1];
+    logic [ppu::CMDRAM_ADDR_WIDTH-1:0] cmdram_w_addr;
+    assign cmdram_w_addr = ram_addr[ppu::CMDRAM_ADDR_WIDTH:1];
     logic [7:0] cmdram_w_strobe;
-    logic [spu::COMMAND_SIZE-1:0] cmdram_din;
+    logic [ppu::COMMAND_SIZE-1:0] cmdram_din;
 
-    spu::Rgb color;
+    ppu::Rgb color;
     logic [9:0] target_line;
-    Spu spu (
+    Ppu ppu (
        	.clk  (clk_pixel),
         .cpu_clk(clk),
         .cram_w_addr(cram_w_addr),
@@ -154,13 +154,13 @@ module core (
         cmdram_w_strobe = '0;
         cmdram_din = '0;
 
-        if (ram_addr >= MMIO_CRAM_ADDR && ram_addr < MMIO_CRAM_ADDR + spu::CRAM_SIZE) begin
+        if (ram_addr >= MMIO_CRAM_ADDR && ram_addr < MMIO_CRAM_ADDR + ppu::CRAM_SIZE) begin
             cram_w_strobe = ram_w_strobe[3:0];
-            cram_din = ram_din[spu::CRAM_DATA_WIDTH-1:0];
-        end else if (ram_addr >= MMIO_VRAM_ADDR && ram_addr < MMIO_VRAM_ADDR + spu::VRAM_SIZE) begin
+            cram_din = ram_din[ppu::CRAM_DATA_WIDTH-1:0];
+        end else if (ram_addr >= MMIO_VRAM_ADDR && ram_addr < MMIO_VRAM_ADDR + ppu::VRAM_SIZE) begin
             vram_w_strobe = ram_w_strobe;
-            vram_din = ram_din[spu::VRAM_DATA_WIDTH-1:0];
-        end else if (ram_addr >= MMIO_CMDRAM_ADDR && ram_addr < MMIO_CMDRAM_ADDR + spu::CMDRAM_SIZE * 2) begin
+            vram_din = ram_din[ppu::VRAM_DATA_WIDTH-1:0];
+        end else if (ram_addr >= MMIO_CMDRAM_ADDR && ram_addr < MMIO_CMDRAM_ADDR + ppu::CMDRAM_SIZE * 2) begin
             if (ram_addr[0]) begin
                 cmdram_w_strobe = {ram_w_strobe, 4'b0};
                 cmdram_din = {ram_din, 32'b0};

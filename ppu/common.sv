@@ -1,4 +1,4 @@
-package spu;
+package ppu;
     localparam unsigned LANES = 4;
     localparam unsigned LANES_LOG2 = $clog2(LANES);
 
