@@ -6,7 +6,7 @@ package spu;
     localparam CRAM_DATA_WIDTH = 32;
     localparam CRAM_SIZE = 2 ** CRAM_ADDR_WIDTH;
 
-    localparam VRAM_LOGICAL_ADDR_WIDTH = 15;
+    localparam VRAM_LOGICAL_ADDR_WIDTH = 14;
     localparam VRAM_ADDR_WIDTH = VRAM_LOGICAL_ADDR_WIDTH - LANES_LOG2;
     localparam VRAM_LOGICAL_DATA_WIDTH = 8;
     localparam VRAM_DATA_WIDTH = VRAM_LOGICAL_DATA_WIDTH * LANES;
