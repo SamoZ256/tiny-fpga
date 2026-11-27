@@ -50,8 +50,11 @@ module SinglePortVram #(
     input logic      [W_STROBE_WIDTH-1:0] w_strobe,
     input logic      [            DATA_WIDTH-1:0] din
 );
-    wire r_clks[1] = {r_clk};
-    wire [ADDR_WIDTH-1:0] r_addrs[1] = {r_addr};
+    // Separate assigns: Verible can't parse an unpacked net declaration with an initializer
+    wire r_clks[1];
+    wire [ADDR_WIDTH-1:0] r_addrs[1];
+    assign r_clks = '{r_clk};
+    assign r_addrs = '{r_addr};
     logic [DATA_WIDTH-1:0] douts[1];
     assign dout = douts[0];
 

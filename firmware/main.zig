@@ -83,10 +83,10 @@ fn main() void {
     initializeFontVram();
 
     // Tilemap
-    const text = "World!";
+    const text = "Hello, World! This is a very looong text";
     for (0..text.len) |i| {
         const c = text[i];
-        mmio.writeVram(@intCast(i * 4), c);
+        mmio.writeVram(@intCast(i), c);
     }
 
     // Main loop
@@ -120,8 +120,8 @@ fn main() void {
                 }
 
                 const Span = packed struct(u61) {
-                    end_x: u10,
                     begin_x: u10,
+                    len: u10,
                     vram_addr_13_2: u12,
                     vram_bits_log2: u2,
                     vram_bit_offset: u5,
@@ -129,8 +129,8 @@ fn main() void {
                     reserved: u14 = 0,
                 };
 
-                pub fn span(begin_x: u10, end_x: u10, vram_addr: mmio.VramAddr, vram_bits: u32, cram_addr_offset: mmio.CramAddr) Command {
-                    return .{ .kind = .span, .param = @bitCast(Span{ .end_x = end_x, .begin_x = begin_x, .vram_addr_13_2 = @intCast(vram_addr >> 2), .vram_bits_log2 = @intCast(31 - @clz(vram_bits)), .vram_bit_offset = @intCast((vram_addr & 0x3) * 8), .cram_addr_offset = cram_addr_offset }) };
+                pub fn span(begin_x: u10, len: u10, vram_addr: mmio.VramAddr, vram_bits: u32, cram_addr_offset: mmio.CramAddr) Command {
+                    return .{ .kind = .span, .param = @bitCast(Span{ .begin_x = begin_x, .len = len, .vram_addr_13_2 = @intCast(vram_addr >> 2), .vram_bits_log2 = @intCast(31 - @clz(vram_bits)), .vram_bit_offset = @intCast((vram_addr & 0x3) * 8), .cram_addr_offset = cram_addr_offset }) };
                 }
 
                 const Tiles = packed struct(u61) {
@@ -187,7 +187,7 @@ fn main() void {
             }
 
             inline fn span(index: *mmio.CmdramAddr, x: u32, len: u32, vram_addr: mmio.VramAddr, vram_bits: u32, cram_addr_offset: mmio.CramAddr) void {
-                mmio.writeCmdram(index.*, @bitCast(Command.span(@intCast(x), @intCast(x + len), vram_addr, vram_bits, cram_addr_offset)));
+                mmio.writeCmdram(index.*, @bitCast(Command.span(@intCast(x), @intCast(len), vram_addr, vram_bits, cram_addr_offset)));
                 index.* += 1;
             }
 
@@ -213,16 +213,14 @@ fn main() void {
 
                     // Text
                     if (line < 8) {
-                        const text2 = "Hello,";
+                        const text2 = "SPAN :)";
                         for (0..text2.len) |i| {
                             const c = text2[i];
                             span(&index, i * 8, 8, getFontVramAddr(c, @intCast(line)), 1, 1);
                         }
                     }
                     if (line >= 8 and line < 16) {
-                        for (0..text.len) |i| {
-                            tiles(&index, i * 8, @intCast(i * 4), 1, @intCast(FONT_VRAM_ADDR_OFFSET + line - 8), char_width, char_height, 1, 1);
-                        }
+                        tiles(&index, 0, 0, @intCast(text.len), @intCast(FONT_VRAM_ADDR_OFFSET + line - 8), char_width, char_height, 1, 1);
                     }
                 }
                 mmio.writeCmdram(index, @bitCast(Command.endLine()));
