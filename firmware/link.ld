@@ -3,8 +3,8 @@ ENTRY(_start)
 
 MEMORY
 {
-    /* Must match RAM_ADDR_WIDTH in main.sv: 2^11 words = 8 KiB */
-    RAM (rwx) : ORIGIN = 0x00000000, LENGTH = 8K
+    /* Must match RAM_ADDR_WIDTH in main.sv: 2^12 words = 16 KiB */
+    RAM (rwx) : ORIGIN = 0x00000000, LENGTH = 16K
 }
 
 STACK_SIZE = 1K;

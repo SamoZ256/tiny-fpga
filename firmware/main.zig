@@ -1,6 +1,8 @@
 const std = @import("std");
 const common = @import("common/common.zig");
 const mmio = @import("common/mmio.zig");
+const CommandEncoder = @import("ppu/command_encoder.zig").CommandEncoder;
+const Renderer = @import("ppu/renderer.zig").Renderer;
 
 export fn _start() linksection(".text.start") callconv(.naked) noreturn {
     asm volatile (
@@ -32,7 +34,7 @@ export fn _init() noreturn {
     @setRuntimeSafety(false);
 
     // Main
-    main();
+    main() catch {};
 
     // Loop forever
     while (true) {}
@@ -64,7 +66,9 @@ fn initializeFontVram() void {
     }
 }
 
-fn main() void {
+var buffer: [4096]u8 = undefined;
+
+fn main() !void {
     // Get screen params
     //const screen_width = readScreenWidth();
     //const screen_height = readScreenHeight();
@@ -89,6 +93,34 @@ fn main() void {
         mmio.writeVram(@intCast(i), c);
     }
 
+    var allocator = std.heap.FixedBufferAllocator.init(&buffer);
+
+    var renderer = try Renderer.init(allocator.allocator(), common.WIDTH, common.HEIGHT);
+    defer renderer.deinit();
+
+    const ground_y = 440;
+    const ground_color = common.Rgba.init(0x20, 0x80, 0x20, 0xff);
+    //     const ball_color = common.Rgba.initPremultiplied(0xff, 0x80, 0x00, 0x7f);
+    //     const radius = 100;
+    //     const min_x = radius;
+    //     const max_x = common.WIDTH - 1 - radius;
+    //     const min_y = radius;
+    //     const max_y = ground_y - 1 - radius;
+    //
+    //     const half_widths = blk: {
+    //         var widths: [2 * radius + 1]u8 = undefined;
+    //         for (&widths, 0..) |*width, i| {
+    //             const dy: f64 = @as(f64, @floatFromInt(i)) - radius;
+    //             width.* = @intFromFloat(@round(@sqrt(radius * radius - dy * dy)));
+    //         }
+    //         break :blk widths;
+    //     };
+
+    // var ball_x: i32 = 200;
+    // var ball_y: i32 = 150;
+    // var vel_x: i32 = 3;
+    // var vel_y: i32 = 2;
+
     // Main loop
     //var buttons_last: u2 = 0;
     while (true) {
@@ -96,142 +128,56 @@ fn main() void {
         //buttons_last = buttons;
         mmio.writeLed(buttons);
 
+        // Game logic
+        // ball_x = std.math.clamp(ball_x + vel_x, min_x, max_x);
+        // if (ball_x == min_x or ball_x == max_x) vel_x = -vel_x;
+        // ball_y = std.math.clamp(ball_y + vel_y, min_y, max_y);
+        // if (ball_y == min_y or ball_y == max_y) vel_y = -vel_y;
+
         // Draw
-        const Draw = struct {
-            const Kind = enum(u3) { end_line = 1, fill = 2, span = 3, tiles = 4 };
 
-            const Command = packed struct(u64) {
-                kind: Kind,
-                param: u61 = 0,
+        renderer.clear();
 
-                pub fn endLine() Command {
-                    return .{ .kind = .end_line };
-                }
+        // Sky and sun
+        //         for (0..ground_y) |y| {
+        //             // Sky
+        //             const sky = common.Rgba.init(0x10, @intCast(0x20 + y / 4), @intCast(0x60 + y / 4), 0xff);
+        //             try renderer.cmdFill(0, @intCast(y), common.WIDTH, 1, sky);
+        //
+        //             // Sun
+        //             const row = @as(i32, @intCast(y)) - ball_y + radius;
+        //             if (row >= 0 and row <= 2 * radius) {
+        //                 const half_width: i32 = half_widths[@intCast(row)];
+        //                 const x0: u32 = @intCast(ball_x - half_width);
+        //                 const x1: u32 = @intCast(ball_x + half_width + 1);
+        //                 try renderer.cmdFill(@intCast(x0), @intCast(y), @intCast(x1 - x0), 1, ball_color);
+        //             }
+        //         }
+        try renderer.cmdFill(0, 0, common.WIDTH, ground_y, common.Rgba.init(0x10, 0x20, 0x60, 0xff));
 
-                const Fill = packed struct(u61) {
-                    begin_x: u10,
-                    end_x: u10,
-                    color: u32,
-                    reserved: u9 = 0,
-                };
+        // Ground
+        try renderer.cmdFill(0, ground_y, common.WIDTH, common.HEIGHT - ground_y, ground_color);
 
-                pub fn fill(begin_x: u10, end_x: u10, color: u32) Command {
-                    return .{ .kind = .fill, .param = @bitCast(Fill{ .begin_x = begin_x, .end_x = end_x, .color = color }) };
-                }
+        // Text
+        const text2 = "S";
+        for (0..text2.len) |i| {
+            const c = text2[i];
+            try renderer.cmdSprite(@intCast(i * char_width), 0, char_width, char_height, getFontVramAddr(c, 0), 1, 1, 1);
+        }
 
-                const Span = packed struct(u61) {
-                    begin_x: u10,
-                    len: u10,
-                    vram_addr_13_2: u12,
-                    vram_bits_log2: u2,
-                    vram_bit_offset: u5,
-                    cram_addr_offset: u8,
-                    reserved: u14 = 0,
-                };
+        try renderer.cmdTiles(0, 8, char_height, 0, @intCast(text.len), @intCast(FONT_VRAM_ADDR_OFFSET), char_width, 1, char_height, 1, 1);
 
-                pub fn span(begin_x: u10, len: u10, vram_addr: mmio.VramAddr, vram_bits: u32, cram_addr_offset: mmio.CramAddr) Command {
-                    return .{ .kind = .span, .param = @bitCast(Span{ .begin_x = begin_x, .len = len, .vram_addr_13_2 = @intCast(vram_addr >> 2), .vram_bits_log2 = @intCast(31 - @clz(vram_bits)), .vram_bit_offset = @intCast((vram_addr & 0x3) * 8), .cram_addr_offset = cram_addr_offset }) };
-                }
+        var line = mmio.waitForNextLine();
+        while (line != 0) {
+            line = mmio.waitForNextLine();
+        }
 
-                const Tiles = packed struct(u61) {
-                    begin_x: u10,
-                    tilemap_vram_addr_13_2: u12,
-                    tile_count: u8,
-                    tileset_vram_addr: u14,
-                    tile_width_log2: u3,
-                    tile_stride_log2_4_2: u3,
-                    vram_bits_log2: u2,
-                    cram_addr_offset: u8,
-                    reserved: u1 = 0,
-                };
+        while (line < common.HEIGHT) {
+            var command_encoder = CommandEncoder.init();
+            renderer.renderLine(&command_encoder, line);
+            command_encoder.cmdEndLine();
 
-                pub fn tiles(begin_x: u10, tilemap_vram_addr: mmio.VramAddr, tile_count: u8, tileset_vram_addr: mmio.VramAddr, tile_width: u32, tile_stride: u32, vram_bits: u32, cram_addr_offset: mmio.CramAddr) Command {
-                    // TODO: assert that 2 LSB of tilemap_vram_addr are 0
-                    return .{ .kind = .tiles, .param = @bitCast(Tiles{ .begin_x = begin_x, .tilemap_vram_addr_13_2 = @intCast(tilemap_vram_addr >> 2), .tile_count = tile_count, .tileset_vram_addr = tileset_vram_addr, .tile_width_log2 = @intCast(31 - @clz(tile_width)), .tile_stride_log2_4_2 = @intCast(31 - @clz(tile_stride) - 2), .vram_bits_log2 = @intCast(31 - @clz(vram_bits)), .cram_addr_offset = cram_addr_offset }) };
-                }
-            };
-
-            const ground_y = 440;
-            const ground_color = common.Rgba.init(0x20, 0x80, 0x20, 0xff);
-            const ball_color = common.Rgba.initPremultiplied(0xff, 0x80, 0x00, 0x7f);
-            const radius = 100;
-            const min_x = radius;
-            const max_x = common.WIDTH - 1 - radius;
-            const min_y = radius;
-            const max_y = ground_y - 1 - radius;
-
-            const half_widths = blk: {
-                var widths: [2 * radius + 1]u8 = undefined;
-                for (&widths, 0..) |*width, i| {
-                    const dy: f64 = @as(f64, @floatFromInt(i)) - radius;
-                    width.* = @intFromFloat(@round(@sqrt(radius * radius - dy * dy)));
-                }
-                break :blk widths;
-            };
-
-            var ball_x: i32 = 200;
-            var ball_y: i32 = 150;
-            var vel_x: i32 = 3;
-            var vel_y: i32 = 2;
-
-            fn moveBall() void {
-                ball_x = std.math.clamp(ball_x + vel_x, min_x, max_x);
-                if (ball_x == min_x or ball_x == max_x) vel_x = -vel_x;
-                ball_y = std.math.clamp(ball_y + vel_y, min_y, max_y);
-                if (ball_y == min_y or ball_y == max_y) vel_y = -vel_y;
-            }
-
-            inline fn fill(index: *mmio.CmdramAddr, x: u32, len: u32, color: common.Rgba) void {
-                mmio.writeCmdram(index.*, @bitCast(Command.fill(@intCast(x), @intCast(x + len), color.toRawBits())));
-                index.* += 1;
-            }
-
-            inline fn span(index: *mmio.CmdramAddr, x: u32, len: u32, vram_addr: mmio.VramAddr, vram_bits: u32, cram_addr_offset: mmio.CramAddr) void {
-                mmio.writeCmdram(index.*, @bitCast(Command.span(@intCast(x), @intCast(len), vram_addr, vram_bits, cram_addr_offset)));
-                index.* += 1;
-            }
-
-            inline fn tiles(index: *mmio.CmdramAddr, x: u32, tilemap_vram_addr: mmio.VramAddr, tile_count: u8, tileset_vram_addr: mmio.VramAddr, tile_width: u32, tile_stride: u32, vram_bits: u32, cram_addr_offset: mmio.CramAddr) void {
-                mmio.writeCmdram(index.*, @bitCast(Command.tiles(@intCast(x), tilemap_vram_addr, tile_count, tileset_vram_addr, tile_width, tile_stride, vram_bits, cram_addr_offset)));
-                index.* += 1;
-            }
-
-            fn drawLine(line: u32) void {
-                var index: mmio.CmdramAddr = 0;
-                if (line >= ground_y) {
-                    fill(&index, 0, common.WIDTH, ground_color);
-                } else {
-                    const sky = common.Rgba.init(0x10, @intCast(0x20 + line / 4), @intCast(0x60 + line / 4), 0xff);
-                    const row = @as(i32, @intCast(line)) - ball_y + radius;
-                    fill(&index, 0, common.WIDTH, sky);
-                    if (row >= 0 and row <= 2 * radius) {
-                        const half_width: i32 = half_widths[@intCast(row)];
-                        const x0: u32 = @intCast(ball_x - half_width);
-                        const x1: u32 = @intCast(ball_x + half_width + 1);
-                        fill(&index, x0, x1 - x0, ball_color);
-                    }
-
-                    // Text
-                    if (line < 8) {
-                        const text2 = "SPAN :)";
-                        for (0..text2.len) |i| {
-                            const c = text2[i];
-                            span(&index, i * 8, 8, getFontVramAddr(c, @intCast(line)), 1, 1);
-                        }
-                    }
-                    if (line >= 8 and line < 16) {
-                        tiles(&index, 0, 0, @intCast(text.len), @intCast(FONT_VRAM_ADDR_OFFSET + line - 8), char_width, char_height, 1, 1);
-                    }
-                }
-                mmio.writeCmdram(index, @bitCast(Command.endLine()));
-            }
-        };
-
-        const line = mmio.waitForNextLine();
-        if (line < common.HEIGHT) {
-            Draw.drawLine(line);
-        } else if (line == common.HEIGHT) {
-            Draw.moveBall();
+            line = mmio.waitForNextLine();
         }
     }
 }

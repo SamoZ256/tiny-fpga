@@ -27,7 +27,7 @@ module core (
     );
 
     // RAM
-    localparam RAM_ADDR_WIDTH = 11;
+    localparam RAM_ADDR_WIDTH = 12;
     localparam RAM_PHYSICAL_ADDR_SPACE_SIZE = 2 ** RAM_ADDR_WIDTH;
 
     wire [29:0] ram_addr;
@@ -42,7 +42,7 @@ module core (
         .FILENAME  ("firmware/firmware.hex")
     ) ram (
         .clk(clk),
-        .address(ram_addr[10:0]),
+        .address(ram_addr[RAM_ADDR_WIDTH-1:0]),
         .w_strobe(ram_w_strobe_physical),
         .din(ram_din),
         .dout(ram_dout)
@@ -85,7 +85,7 @@ module core (
     ppu::Rgb color;
     logic [9:0] target_line;
     Ppu ppu (
-       	.clk  (clk_pixel),
+        .clk  (clk_pixel),
         .cpu_clk(clk),
         .cram_w_addr(cram_w_addr),
         .cram_w_strobe(cram_w_strobe),
@@ -96,7 +96,7 @@ module core (
         .cmdram_w_addr(cmdram_w_addr),
         .cmdram_w_strobe(cmdram_w_strobe),
         .cmdram_din(cmdram_din),
-       	.color(color),
+        .color(color),
         .cpu_target_line(target_line)
     );
 
