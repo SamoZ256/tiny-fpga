@@ -14,7 +14,8 @@ module ram #(
 
     initial $readmemh(FILENAME, data);
 
-    always_ff @(posedge clk) begin
+    // Plain always: always_ff may not share `data` with the $readmemh initial block
+    always @(posedge clk) begin
         dout <= data[address];
         for (int i = 0; i < W_STROBE_WIDTH; i = i + 1) begin
             if (w_strobe[i]) begin

@@ -11,16 +11,12 @@ module tmds_encoder (
     wire XNOR = (Nb1s > 4'd4) || (Nb1s == 4'd4 && data[0] == 1'b0);
     wire [8:0] q_m = {~XNOR, q_m[6:0] ^ data[7:1] ^ {7{XNOR}}, data[0]};
 
-    logic [3:0] balance_acc;
+    logic [3:0] balance_acc = 0;
     wire [3:0] balance = q_m[0] + q_m[1] + q_m[2] + q_m[3] + q_m[4] + q_m[5] + q_m[6] + q_m[7] - 4'd4;
     wire balance_sign_eq = (balance[3] == balance_acc[3]);
     wire invert_q_m = (balance == 0 || balance_acc == 0) ? ~q_m[8] : balance_sign_eq;
     wire [3:0] balance_acc_inc = balance - ({q_m[8] ^ ~balance_sign_eq} & ~(balance==0 || balance_acc==0));
     wire [3:0] balance_acc_new = invert_q_m ? balance_acc-balance_acc_inc : balance_acc+balance_acc_inc;
-
-    initial begin
-        balance_acc = 0;
-    end
 
     always_ff @(posedge clk) begin
         if (de) begin

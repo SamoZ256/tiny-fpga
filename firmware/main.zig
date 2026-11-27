@@ -45,23 +45,21 @@ const char_height = 8;
 const bytes_per_char = char_height;
 const char_count = 256;
 
-fn getPixel(char: u8, x: usize, y: usize) bool {
+fn getPixelRow(char: u8, y: usize) u8 {
     const char_offset: usize = @as(usize, char) * bytes_per_char;
-    const row_byte = font_data[char_offset + y];
-    const bit_shift: u33 = @intCast(7 - x);
-    return ((row_byte >> @intCast(bit_shift)) & 1) == 1;
+    return @bitReverse(font_data[char_offset + y]);
 }
 
-fn getFontVramAddr(char: u8, x: u3, y: u3) mmio.VramAddr {
-    return ((@as(mmio.VramAddr, char) * char_height + @as(mmio.VramAddr, y)) * char_width) + @as(mmio.VramAddr, x);
+const FONT_VRAM_ADDR_OFFSET = 0x200;
+
+fn getFontVramAddr(char: u8, y: u3) mmio.VramAddr {
+    return FONT_VRAM_ADDR_OFFSET + (@as(mmio.VramAddr, char) * char_height + @as(mmio.VramAddr, y));
 }
 
 fn initializeFontVram() void {
     for (0..char_count) |char| {
         for (0..char_height) |y| {
-            for (0..char_width) |x| {
-                mmio.writeVram(getFontVramAddr(@intCast(char), @intCast(x), @intCast(y)), if (getPixel(@intCast(char), @intCast(x), @intCast(y))) 3 else 1);
-            }
+            mmio.writeVram(getFontVramAddr(@intCast(char), @intCast(y)), getPixelRow(@intCast(char), @intCast(y)));
         }
     }
 }
@@ -84,6 +82,13 @@ fn main() void {
     // Font
     initializeFontVram();
 
+    // Tilemap
+    const text = "Hello, World! This is a very looong text";
+    for (0..text.len) |i| {
+        const c = text[i];
+        mmio.writeVram(@intCast(i), c);
+    }
+
     // Main loop
     //var buttons_last: u2 = 0;
     while (true) {
@@ -93,7 +98,7 @@ fn main() void {
 
         // Draw
         const Draw = struct {
-            const Kind = enum(u3) { end_line = 1, fill = 2, span = 3 };
+            const Kind = enum(u3) { end_line = 1, fill = 2, span = 3, tiles = 4 };
 
             const Command = packed struct(u64) {
                 kind: Kind,
@@ -111,19 +116,38 @@ fn main() void {
                 };
 
                 pub fn fill(begin_x: u10, end_x: u10, color: u32) Command {
-                    return .{ .kind = .fill, .param = @bitCast(Fill{.begin_x = begin_x, .end_x = end_x, .color = color}) };
+                    return .{ .kind = .fill, .param = @bitCast(Fill{ .begin_x = begin_x, .end_x = end_x, .color = color }) };
                 }
 
                 const Span = packed struct(u61) {
                     begin_x: u10,
-                    end_x: u10,
+                    len: u10,
                     vram_addr_13_2: u12,
-                    reserved: u29 = 0,
+                    vram_bits_log2: u2,
+                    vram_bit_offset: u5,
+                    cram_addr_offset: u8,
+                    reserved: u14 = 0,
                 };
 
-                pub fn span(begin_x: u10, end_x: u10, vram_addr: mmio.VramAddr) Command {
-                    // TODO: assert that 2 LSB of vram_addr are 0
-                    return .{ .kind = .span, .param = @bitCast(Span{.begin_x = begin_x, .end_x = end_x, .vram_addr_13_2 = @intCast(vram_addr >> 2)}) };
+                pub fn span(begin_x: u10, len: u10, vram_addr: mmio.VramAddr, vram_bits: u32, cram_addr_offset: mmio.CramAddr) Command {
+                    return .{ .kind = .span, .param = @bitCast(Span{ .begin_x = begin_x, .len = len, .vram_addr_13_2 = @intCast(vram_addr >> 2), .vram_bits_log2 = @intCast(31 - @clz(vram_bits)), .vram_bit_offset = @intCast((vram_addr & 0x3) * 8), .cram_addr_offset = cram_addr_offset }) };
+                }
+
+                const Tiles = packed struct(u61) {
+                    begin_x: u10,
+                    tilemap_vram_addr_13_2: u12,
+                    tile_count: u8,
+                    tileset_vram_addr: u14,
+                    tile_width_log2: u3,
+                    tile_stride_log2_4_2: u3,
+                    vram_bits_log2: u2,
+                    cram_addr_offset: u8,
+                    reserved: u1 = 0,
+                };
+
+                pub fn tiles(begin_x: u10, tilemap_vram_addr: mmio.VramAddr, tile_count: u8, tileset_vram_addr: mmio.VramAddr, tile_width: u32, tile_stride: u32, vram_bits: u32, cram_addr_offset: mmio.CramAddr) Command {
+                    // TODO: assert that 2 LSB of tilemap_vram_addr are 0
+                    return .{ .kind = .tiles, .param = @bitCast(Tiles{ .begin_x = begin_x, .tilemap_vram_addr_13_2 = @intCast(tilemap_vram_addr >> 2), .tile_count = tile_count, .tileset_vram_addr = tileset_vram_addr, .tile_width_log2 = @intCast(31 - @clz(tile_width)), .tile_stride_log2_4_2 = @intCast(31 - @clz(tile_stride) - 2), .vram_bits_log2 = @intCast(31 - @clz(vram_bits)), .cram_addr_offset = cram_addr_offset }) };
                 }
             };
 
@@ -162,8 +186,13 @@ fn main() void {
                 index.* += 1;
             }
 
-            inline fn span(index: *mmio.CmdramAddr, x: u32, len: u32, vram_addr: mmio.VramAddr) void {
-                mmio.writeCmdram(index.*, @bitCast(Command.span(@intCast(x), @intCast(x + len), vram_addr)));
+            inline fn span(index: *mmio.CmdramAddr, x: u32, len: u32, vram_addr: mmio.VramAddr, vram_bits: u32, cram_addr_offset: mmio.CramAddr) void {
+                mmio.writeCmdram(index.*, @bitCast(Command.span(@intCast(x), @intCast(len), vram_addr, vram_bits, cram_addr_offset)));
+                index.* += 1;
+            }
+
+            inline fn tiles(index: *mmio.CmdramAddr, x: u32, tilemap_vram_addr: mmio.VramAddr, tile_count: u8, tileset_vram_addr: mmio.VramAddr, tile_width: u32, tile_stride: u32, vram_bits: u32, cram_addr_offset: mmio.CramAddr) void {
+                mmio.writeCmdram(index.*, @bitCast(Command.tiles(@intCast(x), tilemap_vram_addr, tile_count, tileset_vram_addr, tile_width, tile_stride, vram_bits, cram_addr_offset)));
                 index.* += 1;
             }
 
@@ -184,11 +213,14 @@ fn main() void {
 
                     // Text
                     if (line < 8) {
-                        const text = "Hello!";
-                        for (0..text.len) |i| {
-                            const c = text[i];
-                            span(&index, i * 8 + 4 - line / 2 - 1, 8, getFontVramAddr(c, 0, @intCast(line)));
+                        const text2 = "SPAN :)";
+                        for (0..text2.len) |i| {
+                            const c = text2[i];
+                            span(&index, i * 8, 8, getFontVramAddr(c, @intCast(line)), 1, 1);
                         }
+                    }
+                    if (line >= 8 and line < 16) {
+                        tiles(&index, 0, 0, @intCast(text.len), @intCast(FONT_VRAM_ADDR_OFFSET + line - 8), char_width, char_height, 1, 1);
                     }
                 }
                 mmio.writeCmdram(index, @bitCast(Command.endLine()));
