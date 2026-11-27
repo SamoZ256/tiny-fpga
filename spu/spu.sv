@@ -152,6 +152,7 @@ module Spu (
     assign fill_param = FillParam'(command[63:3]);
 
     typedef struct packed {
+        logic [7:0] cram_addr_offset;
         logic [4:0] vram_bit_offset;
         logic [1:0] vram_bits_log2;
         logic [11:0] vram_addr;
@@ -159,20 +160,20 @@ module Spu (
     } Span;
 
     typedef struct packed {
-        logic [21:0] reserved;
-        logic [9:0] end_x;
+        logic [13:0] reserved;
         Span span;
+        logic [9:0] end_x;
     } SpanParam;
     SpanParam span_param;
     assign span_param = SpanParam'(command[63:3]);
 
     typedef struct packed {
-        logic [5:0] reserved;
-        logic [4:0] vram_bit_offset;
+        logic reserved;
+        logic [7:0] cram_addr_offset;
         logic [1:0] vram_bits_log2;
         logic [2:0] tile_stride_log2;
         logic [2:0] tile_width_log2;
-        logic [11:0] tileset_vram_addr;
+        logic [13:0] tileset_vram_logical_addr;
         logic [7:0] tile_count;
         logic [11:0] tilemap_vram_addr;
         logic [9:0] begin_x;
@@ -211,7 +212,7 @@ module Spu (
 
     Span span;
     logic [$clog2(VRAM_DATA_WIDTH):0] span_vram_dout_bit_offset;
-    assign span_vram_dout_bit_offset = (LANES * VRAM_LOGICAL_DATA_WIDTH) - (span.begin_x[LANES_LOG2-1:0] << span.vram_bits_log2) + span.vram_bit_offset;
+    assign span_vram_dout_bit_offset = 6'(LANES * VRAM_LOGICAL_DATA_WIDTH) - (6'(span.begin_x[LANES_LOG2-1:0]) << span.vram_bits_log2) + 6'(span.vram_bit_offset);
 
     logic [$clog2(VRAM_DATA_WIDTH):0] vram_dout_bit_offset;
     logic [$clog2(VRAM_DATA_WIDTH)+1:0] next_vram_dout_bit_offset;
@@ -230,8 +231,8 @@ module Spu (
 
     always_comb begin
         // CRAM read
-        for (int i = 0; i < LANES; i++) begin
-            cram_r_addrs[i] = (vram_douts >> ((i << span.vram_bits_log2) + vram_dout_bit_offset_delayed1)) & ((1 << (1 << span.vram_bits_log2)) - 1);
+        for (int unsigned i = 0; i < LANES; i++) begin
+            cram_r_addrs[i] = span.cram_addr_offset + (8'(vram_douts >> ((6'(i) << span.vram_bits_log2) + vram_dout_bit_offset_delayed1)) & ((1 << (1 << span.vram_bits_log2)) - 1));
         end
 
         crnt_draw_end = '0;
@@ -254,12 +255,12 @@ module Spu (
             // Line input
             case (draw_source)
                 DrawSource_constant: begin
-                    for (int i = 0; i < LANES; i++) begin
+                    for (int unsigned i = 0; i < LANES; i++) begin
                         lines_din[i] = fill_color;
                     end
                 end
                 DrawSource_mem: begin
-                    for (int i = 0; i < LANES; i++) begin
+                    for (int unsigned i = 0; i < LANES; i++) begin
                         lines_din[i] = Rgba'(cram_douts[i]);
                     end
                 end
@@ -313,7 +314,7 @@ module Spu (
                 end
                 State_span_prepare: begin
                     crnt_x <= span.begin_x;
-                    vram_r_addr <= span.vram_addr - 1 + span_vram_dout_bit_offset[$clog2(VRAM_DATA_WIDTH)];
+                    vram_r_addr <= span.vram_addr - 1 + 12'(span_vram_dout_bit_offset[$clog2(VRAM_DATA_WIDTH)]);
                     vram_dout_bit_offset <= {1'b0, span_vram_dout_bit_offset[$clog2(VRAM_DATA_WIDTH)-1:0]};
                     mem_counter <= 1; // Wait for the memory to get fetched
                     state <= State_span_fetch;
@@ -334,9 +335,10 @@ module Spu (
                     if (mem_counter == 0) begin
                         span <= '{
                             begin_x: tiles_param.begin_x,
-                            vram_addr: tiles_param.tileset_vram_addr + ({4'b0, vram_douts[VRAM_LOGICAL_DATA_WIDTH-1:0]} << tiles_param.tile_stride_log2),
+                            vram_addr: tiles_param.tileset_vram_logical_addr[VRAM_LOGICAL_ADDR_WIDTH-1:2] + ({4'b0, vram_douts[VRAM_LOGICAL_DATA_WIDTH-1:0]} << tiles_param.tile_stride_log2),
                             vram_bits_log2: tiles_param.vram_bits_log2,
-                            vram_bit_offset: tiles_param.vram_bit_offset
+                            vram_bit_offset: {3'b0, tiles_param.tileset_vram_logical_addr[1:0]} * VRAM_LOGICAL_DATA_WIDTH,
+                            cram_addr_offset: tiles_param.cram_addr_offset
                         };
                         crnt_end_x <= crnt_x + (1 << tiles_param.tile_width_log2);
                         state <= State_span_prepare;
