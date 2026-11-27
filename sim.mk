@@ -12,9 +12,9 @@ SIM_SOURCES := \
 	vga/vga.sv \
 	spu/common.sv \
 	spu/vram.sv \
-	spu/engine.sv \
 	spu/multiplier_normalized8.sv \
 	spu/color_resolver.sv \
+	spu/line_buffer.sv \
 	spu/spu.sv \
 	core.sv
 SIM_CLK_HZ := 50000000

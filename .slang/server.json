@@ -1,0 +1,3 @@
+{
+    "flags": "-Weverything -Werror -v .slang/ecp5_primitives.v --suppress-warnings .slang/ecp5_primitives.v,vga/pll1.v"
+}

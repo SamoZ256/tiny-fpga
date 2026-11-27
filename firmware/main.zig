@@ -1,7 +1,6 @@
 const std = @import("std");
 const common = @import("common/common.zig");
 const mmio = @import("common/mmio.zig");
-const Spu = @import("spu/Spu.zig");
 
 export fn _start() linksection(".text.start") callconv(.naked) noreturn {
     asm volatile (
@@ -46,23 +45,21 @@ const char_height = 8;
 const bytes_per_char = char_height;
 const char_count = 256;
 
-fn getPixel(char: u8, x: usize, y: usize) bool {
+fn getPixelRow(char: u8, y: usize) u8 {
     const char_offset: usize = @as(usize, char) * bytes_per_char;
-    const row_byte = font_data[char_offset + y];
-    const bit_shift: u33 = @intCast(7 - x);
-    return ((row_byte >> @intCast(bit_shift)) & 1) == 1;
+    return @bitReverse(font_data[char_offset + y]);
 }
 
-fn getFontVramAddr(char: u8, x: u3, y: u3) mmio.VramAddr {
-    return ((@as(mmio.VramAddr, char) * char_height + @as(mmio.VramAddr, y)) * char_width) + @as(mmio.VramAddr, x);
+const FONT_VRAM_ADDR_OFFSET = 0x200;
+
+fn getFontVramAddr(char: u8, y: u3) mmio.VramAddr {
+    return FONT_VRAM_ADDR_OFFSET + (@as(mmio.VramAddr, char) * char_height + @as(mmio.VramAddr, y));
 }
 
 fn initializeFontVram() void {
     for (0..char_count) |char| {
         for (0..char_height) |y| {
-            for (0..char_width) |x| {
-                mmio.writeVram(getFontVramAddr(@intCast(char), @intCast(x), @intCast(y)), if (getPixel(@intCast(char), @intCast(x), @intCast(y))) 0xbf else 0);
-            }
+            mmio.writeVram(getFontVramAddr(@intCast(char), @intCast(y)), getPixelRow(@intCast(char), @intCast(y)));
         }
     }
 }
@@ -74,133 +71,167 @@ fn main() void {
 
     // SPU
 
-    const spu = Spu.init();
-
     // Palette
-    mmio.writeCram(0, 0xff00ff);
-    mmio.writeCram(1, 0x000000);
-    mmio.writeCram(2, 0xffffff);
-    mmio.writeCram(3, 0x0000ff);
-    mmio.writeCram(4, 0x00ff00);
-    mmio.writeCram(5, 0xff0000);
+    mmio.writeCram(0, common.Rgba.initPremultiplied(0xff, 0x00, 0xff, 0xff).toRawBits());
+    mmio.writeCram(1, common.Rgba.initPremultiplied(0x00, 0x00, 0x00, 0x00).toRawBits());
+    mmio.writeCram(2, common.Rgba.initPremultiplied(0xff, 0xff, 0xff, 0xff).toRawBits());
+    mmio.writeCram(3, common.Rgba.initPremultiplied(0xff, 0x00, 0x00, 0xff).toRawBits());
+    mmio.writeCram(4, common.Rgba.initPremultiplied(0x00, 0xff, 0x00, 0xff).toRawBits());
+    mmio.writeCram(5, common.Rgba.initPremultiplied(0x00, 0x00, 0xff, 0xff).toRawBits());
 
     // Font
     initializeFontVram();
 
-    // Background
-    {
-        var encoder = Spu.InstructionEncoder.init(0);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .cram_addr_offset = 1 });
-        _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, Spu.InstructionEncoder.getCyclesFromCoords(0, 10) - 2);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .cram_addr_offset = 2 });
-        _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, Spu.InstructionEncoder.getCyclesFromCoords(0, 1) - 2);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .alpha_bits = 1 });
-        encoder.endEncoding();
+    // Tilemap
+    const text = "Hello, World! This is a very looong text";
+    for (0..text.len) |i| {
+        const c = text[i];
+        mmio.writeVram(@intCast(i), c);
     }
-
-    spu.engines[0].reset(0);
-
-    // Window
-    {
-        var encoder = Spu.InstructionEncoder.init(500);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .alpha_bits = 1 });
-        _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, Spu.InstructionEncoder.getCyclesFromCoords(0, 100) - 1);
-        const loop_addr = encoder.encodeSleep(Spu.InstructionEncoder.RZ, 100 - 1);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .cram_addr_offset = 2 });
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .cram_addr_offset = 1 });
-        _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, 200 - 3);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .cram_addr_offset = 2 });
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .alpha_bits = 1 });
-        _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, Spu.InstructionEncoder.getCyclesFromCoords(0, 1) - 100 - 200 - 5);
-        _ = encoder.encodeJal(Spu.InstructionEncoder.RZ, loop_addr);
-        encoder.endEncoding();
-    }
-
-    spu.engines[1].reset(500);
-
-    // Foreground
-    const text = "\u{1e} Page Up \u{1f} Page Down";
-    const text2 = "Hello, World!";
-
-    {
-        var encoder = Spu.InstructionEncoder.init(20);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .alpha_bits = 1 });
-        _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, Spu.InstructionEncoder.getCyclesFromCoords(0, 1) - 12);
-        _ = encoder.encodeLi(1, 40);
-        _ = encoder.encodeLi(2, text.len);
-        _ = encoder.encodeCall(Spu.InstructionEncoder.RZ, 400);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .alpha_bits = 1 });
-        _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, Spu.InstructionEncoder.getCyclesFromCoords(0, 4) - 12);
-        _ = encoder.encodeLi(1, 200);
-        _ = encoder.encodeLi(2, text2.len);
-        _ = encoder.encodeCall(Spu.InstructionEncoder.RZ, 400);
-        encoder.endEncoding();
-    }
-
-    {
-        var encoder = Spu.InstructionEncoder.init(40);
-        for (0..text.len) |i| {
-            const c = text[i];
-            _ = encoder.encodeSllI(5, 7, 3);
-            _ = encoder.encodeAddI(5, 5, getFontVramAddr(c, 0, 0));
-            _ = encoder.encodeBlit(5, .{ .vram_value_shift_increment = 8, .cram_addr_bits = 0, .alpha_bits = 8, .cram_addr_offset = 2 });
-            _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, 4);
-        }
-        _ = encoder.encodeRet();
-        encoder.endEncoding();
-    }
-
-    {
-        var encoder = Spu.InstructionEncoder.init(200);
-        for (0..text2.len) |i| {
-            const c = text2[i];
-            _ = encoder.encodeSllI(5, 7, 3);
-            _ = encoder.encodeAddI(5, 5, getFontVramAddr(c, 0, 0));
-            _ = encoder.encodeBlit(5, .{ .vram_value_shift_increment = 8, .cram_addr_bits = 0, .alpha_bits = 8, .cram_addr_offset = 3 });
-            _ = encoder.encodeSleep(Spu.InstructionEncoder.RZ, 4);
-        }
-        _ = encoder.encodeRet();
-        encoder.endEncoding();
-    }
-
-    {
-        var encoder = Spu.InstructionEncoder.init(400);
-        _ = encoder.encodeLi(7, 0);
-        _ = encoder.encodeLi(6, 8);
-        const loop_addr = encoder.encodeCall(1, 0);
-        _ = encoder.encodeBlit(Spu.InstructionEncoder.RZ, .{ .alpha_bits = 1 });
-        _ = encoder.encodeLi(5, (common.LINE + 1) - 1 - 11);
-        _ = encoder.encodeSllI(4, 2, 3);
-        _ = encoder.encodeSubR(5, 5, 4);
-        _ = encoder.encodeSleep(5, 0);
-        _ = encoder.encodeInc(7);
-        _ = encoder.encodeBne(7, 6, loop_addr);
-        _ = encoder.encodeRet();
-        encoder.endEncoding();
-    }
-
-    spu.engines[2].reset(20);
-
-    // Wait for vblank and start
-    Spu.waitForVblank();
-    spu.engines[0].start();
-    spu.engines[1].start();
-    spu.engines[2].start();
 
     // Main loop
-    var buttons_last: u2 = 0;
+    //var buttons_last: u2 = 0;
     while (true) {
         const buttons = mmio.readButtons();
-        if (buttons & 1 != 0 and buttons_last & 1 == 0) {
-            spu.engines[1].stop();
-        }
-        if (buttons & 2 != 0 and buttons_last & 2 == 0) {
-            spu.engines[1].start();
-        }
-        buttons_last = buttons;
+        //buttons_last = buttons;
         mmio.writeLed(buttons);
 
-        // Wait for vblank
-        Spu.waitForVblank();
+        // Draw
+        const Draw = struct {
+            const Kind = enum(u3) { end_line = 1, fill = 2, span = 3, tiles = 4 };
+
+            const Command = packed struct(u64) {
+                kind: Kind,
+                param: u61 = 0,
+
+                pub fn endLine() Command {
+                    return .{ .kind = .end_line };
+                }
+
+                const Fill = packed struct(u61) {
+                    begin_x: u10,
+                    end_x: u10,
+                    color: u32,
+                    reserved: u9 = 0,
+                };
+
+                pub fn fill(begin_x: u10, end_x: u10, color: u32) Command {
+                    return .{ .kind = .fill, .param = @bitCast(Fill{ .begin_x = begin_x, .end_x = end_x, .color = color }) };
+                }
+
+                const Span = packed struct(u61) {
+                    begin_x: u10,
+                    len: u10,
+                    vram_addr_13_2: u12,
+                    vram_bits_log2: u2,
+                    vram_bit_offset: u5,
+                    cram_addr_offset: u8,
+                    reserved: u14 = 0,
+                };
+
+                pub fn span(begin_x: u10, len: u10, vram_addr: mmio.VramAddr, vram_bits: u32, cram_addr_offset: mmio.CramAddr) Command {
+                    return .{ .kind = .span, .param = @bitCast(Span{ .begin_x = begin_x, .len = len, .vram_addr_13_2 = @intCast(vram_addr >> 2), .vram_bits_log2 = @intCast(31 - @clz(vram_bits)), .vram_bit_offset = @intCast((vram_addr & 0x3) * 8), .cram_addr_offset = cram_addr_offset }) };
+                }
+
+                const Tiles = packed struct(u61) {
+                    begin_x: u10,
+                    tilemap_vram_addr_13_2: u12,
+                    tile_count: u8,
+                    tileset_vram_addr: u14,
+                    tile_width_log2: u3,
+                    tile_stride_log2_4_2: u3,
+                    vram_bits_log2: u2,
+                    cram_addr_offset: u8,
+                    reserved: u1 = 0,
+                };
+
+                pub fn tiles(begin_x: u10, tilemap_vram_addr: mmio.VramAddr, tile_count: u8, tileset_vram_addr: mmio.VramAddr, tile_width: u32, tile_stride: u32, vram_bits: u32, cram_addr_offset: mmio.CramAddr) Command {
+                    // TODO: assert that 2 LSB of tilemap_vram_addr are 0
+                    return .{ .kind = .tiles, .param = @bitCast(Tiles{ .begin_x = begin_x, .tilemap_vram_addr_13_2 = @intCast(tilemap_vram_addr >> 2), .tile_count = tile_count, .tileset_vram_addr = tileset_vram_addr, .tile_width_log2 = @intCast(31 - @clz(tile_width)), .tile_stride_log2_4_2 = @intCast(31 - @clz(tile_stride) - 2), .vram_bits_log2 = @intCast(31 - @clz(vram_bits)), .cram_addr_offset = cram_addr_offset }) };
+                }
+            };
+
+            const ground_y = 440;
+            const ground_color = common.Rgba.init(0x20, 0x80, 0x20, 0xff);
+            const ball_color = common.Rgba.initPremultiplied(0xff, 0x80, 0x00, 0x7f);
+            const radius = 100;
+            const min_x = radius;
+            const max_x = common.WIDTH - 1 - radius;
+            const min_y = radius;
+            const max_y = ground_y - 1 - radius;
+
+            const half_widths = blk: {
+                var widths: [2 * radius + 1]u8 = undefined;
+                for (&widths, 0..) |*width, i| {
+                    const dy: f64 = @as(f64, @floatFromInt(i)) - radius;
+                    width.* = @intFromFloat(@round(@sqrt(radius * radius - dy * dy)));
+                }
+                break :blk widths;
+            };
+
+            var ball_x: i32 = 200;
+            var ball_y: i32 = 150;
+            var vel_x: i32 = 3;
+            var vel_y: i32 = 2;
+
+            fn moveBall() void {
+                ball_x = std.math.clamp(ball_x + vel_x, min_x, max_x);
+                if (ball_x == min_x or ball_x == max_x) vel_x = -vel_x;
+                ball_y = std.math.clamp(ball_y + vel_y, min_y, max_y);
+                if (ball_y == min_y or ball_y == max_y) vel_y = -vel_y;
+            }
+
+            inline fn fill(index: *mmio.CmdramAddr, x: u32, len: u32, color: common.Rgba) void {
+                mmio.writeCmdram(index.*, @bitCast(Command.fill(@intCast(x), @intCast(x + len), color.toRawBits())));
+                index.* += 1;
+            }
+
+            inline fn span(index: *mmio.CmdramAddr, x: u32, len: u32, vram_addr: mmio.VramAddr, vram_bits: u32, cram_addr_offset: mmio.CramAddr) void {
+                mmio.writeCmdram(index.*, @bitCast(Command.span(@intCast(x), @intCast(len), vram_addr, vram_bits, cram_addr_offset)));
+                index.* += 1;
+            }
+
+            inline fn tiles(index: *mmio.CmdramAddr, x: u32, tilemap_vram_addr: mmio.VramAddr, tile_count: u8, tileset_vram_addr: mmio.VramAddr, tile_width: u32, tile_stride: u32, vram_bits: u32, cram_addr_offset: mmio.CramAddr) void {
+                mmio.writeCmdram(index.*, @bitCast(Command.tiles(@intCast(x), tilemap_vram_addr, tile_count, tileset_vram_addr, tile_width, tile_stride, vram_bits, cram_addr_offset)));
+                index.* += 1;
+            }
+
+            fn drawLine(line: u32) void {
+                var index: mmio.CmdramAddr = 0;
+                if (line >= ground_y) {
+                    fill(&index, 0, common.WIDTH, ground_color);
+                } else {
+                    const sky = common.Rgba.init(0x10, @intCast(0x20 + line / 4), @intCast(0x60 + line / 4), 0xff);
+                    const row = @as(i32, @intCast(line)) - ball_y + radius;
+                    fill(&index, 0, common.WIDTH, sky);
+                    if (row >= 0 and row <= 2 * radius) {
+                        const half_width: i32 = half_widths[@intCast(row)];
+                        const x0: u32 = @intCast(ball_x - half_width);
+                        const x1: u32 = @intCast(ball_x + half_width + 1);
+                        fill(&index, x0, x1 - x0, ball_color);
+                    }
+
+                    // Text
+                    if (line < 8) {
+                        const text2 = "SPAN :)";
+                        for (0..text2.len) |i| {
+                            const c = text2[i];
+                            span(&index, i * 8, 8, getFontVramAddr(c, @intCast(line)), 1, 1);
+                        }
+                    }
+                    if (line >= 8 and line < 16) {
+                        tiles(&index, 0, 0, @intCast(text.len), @intCast(FONT_VRAM_ADDR_OFFSET + line - 8), char_width, char_height, 1, 1);
+                    }
+                }
+                mmio.writeCmdram(index, @bitCast(Command.endLine()));
+            }
+        };
+
+        const line = mmio.waitForNextLine();
+        if (line < common.HEIGHT) {
+            Draw.drawLine(line);
+        } else if (line == common.HEIGHT) {
+            Draw.moveBall();
+        }
     }
 }

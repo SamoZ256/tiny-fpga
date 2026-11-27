@@ -8,51 +8,35 @@ pub fn readButtons() u2 {
     return @intCast(ptr.*);
 }
 
-pub fn readScreenWidth() u32 {
-    const ptr = @as(*volatile u32, @ptrFromInt(0x10000008));
-    return ptr.*;
-}
-
-pub fn readScreenHeight() u32 {
-    const ptr = @as(*volatile u32, @ptrFromInt(0x1000000c));
-    return ptr.*;
-}
-
-pub fn readVblank() bool {
+pub fn readTargetLine() u10 {
     const ptr = @as(*volatile u32, @ptrFromInt(0x10000010));
-    // TODO: emit plain bit cast
-    return ptr.* != 0;
+    return @intCast(ptr.*);
 }
 
-pub fn waitForVblank() void {
-    while (readVblank()) {}
-    while (!readVblank()) {}
-}
-
-pub const EngineIndex = u4;
-
-pub fn spuCtrl(engine: EngineIndex, cmd: u32) void {
-    const ptr = @as(*volatile u32, @ptrFromInt(0x20000000 + @as(u32, @intCast(engine)) * @sizeOf(u32)));
-    ptr.* = cmd;
+pub fn waitForNextLine() u10 {
+    const prev = readTargetLine();
+    var line = prev;
+    while (line == prev) line = readTargetLine();
+    return line;
 }
 
 pub const CramAddr = u8;
 
-pub fn writeCram(index: CramAddr, color: u24) void {
-    const ptr = @as(*volatile u32, @ptrFromInt(0x24000000 + @as(u32, @intCast(index)) * 4));
+pub fn writeCram(addr: CramAddr, color: u32) void {
+    const ptr = @as(*volatile u32, @ptrFromInt(0x24000000 + @as(u32, @intCast(addr)) * 4));
     ptr.* = color;
 }
 
 pub const VramAddr = u14;
 
-pub fn writeVram(index: VramAddr, value: u8) void {
-    const ptr = @as(*volatile u32, @ptrFromInt(0x28000000 + @as(u32, @intCast(index)) * 4));
+pub fn writeVram(addr: VramAddr, value: u8) void {
+    const ptr = @as(*volatile u8, @ptrFromInt(0x28000000 + @as(u32, @intCast(addr))));
     ptr.* = value;
 }
 
-pub const CmdramAddr = u12;
+pub const CmdramAddr = u8;
 
-pub fn writeCmdram(addr: CmdramAddr, cmd: u32) void {
-    const ptr = @as(*volatile u32, @ptrFromInt(0x2c000000 + @as(u32, @intCast(addr)) * @sizeOf(u32)));
+pub fn writeCmdram(addr: CmdramAddr, cmd: u64) void {
+    const ptr = @as(*volatile u64, @ptrFromInt(0x2c000000 + @as(u32, @intCast(addr)) * @sizeOf(u64)));
     ptr.* = cmd;
 }
